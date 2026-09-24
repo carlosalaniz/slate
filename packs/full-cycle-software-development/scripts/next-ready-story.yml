@@ -1,0 +1,3 @@
+description: Next story whose dependencies are all merged and that is not claimed yet.
+run: "bun $SLATE_PACK/scripts/scripts/next-ready-story.ts"
+timeout: 30s

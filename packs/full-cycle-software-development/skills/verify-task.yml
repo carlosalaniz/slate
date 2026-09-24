@@ -1,0 +1,12 @@
+description: Verify one task and write a strict verdict.
+reads: ["stories/{story}/tasks.yaml", "stories/{story}/TDD.md", "tasks/{task}/design-{round.design}/build-{round}.md", "specs/tech-spec.md"]
+prompt: |
+  Verify task {task} (round {round}). Run the test command from the tech spec. Check each acceptance
+  item in tasks.yaml against the code. Write `tasks/{task}/design-{round.design}/verdict-{round}.md`
+  starting with:
+  ```
+  ---
+  verdict: fail    # exactly pass or fail
+  ---
+  ```
+  then the test output summary and, on fail, a numbered list of what must change.

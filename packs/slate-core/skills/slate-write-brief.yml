@@ -1,0 +1,24 @@
+description: Write .slate/brief.md from the idea and whatever exists in the workspace.
+reads: ["README.md", "package.json", "docs/**/*.md"]
+prompt: |
+  Write the file `.slate/brief.md` in the working directory. Overwrite it if it exists.
+  Use exactly this structure, with YAML frontmatter first:
+
+  ---
+  title: <short title>
+  kind: <software | writing | research | operations | other>
+  ---
+  # Goal
+  # Non-goals
+  # Constraints
+  # Audience
+  # Success criteria
+  # Assumptions
+
+  The idea, verbatim from the person who started this job (if it is empty, infer the goal from
+  the workspace):
+
+  {idea}
+
+  Look at the existing workspace files attached to this prompt (if any) so the brief reflects
+  what already exists. Write the file, then stop.

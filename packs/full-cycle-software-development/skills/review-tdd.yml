@@ -1,0 +1,12 @@
+description: Review the story's technical design and write a strict verdict.
+reads: ["stories/{story}/TDD.md", "stories/index.yaml", "specs/tech-spec.md", "specs/product-scope.md"]
+prompt: |
+  Review `stories/{story}/TDD.md` for story {story}. Write `stories/{story}/review-{round}.md` starting
+  with frontmatter:
+  ```
+  ---
+  verdict: pass    # exactly pass or fail
+  ---
+  ```
+  Then a list of concrete requests (empty when pass). Fail when a builder would need to make a design
+  decision, when a test plan is missing, or when it conflicts with the tech spec.

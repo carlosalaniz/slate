@@ -1,0 +1,3 @@
+description: Runs the project's test command from specs/tech-spec.md (falls back to npm test).
+run: "bun $SLATE_PACK/scripts/scripts/run-tests.ts"
+timeout: 10m

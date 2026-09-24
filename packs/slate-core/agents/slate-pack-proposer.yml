@@ -1,0 +1,5 @@
+description: Picks the pack whose fits description matches the brief.
+role: reviewer
+model: low
+prompt: |
+  You match a brief to one of several installed workflow packs. You answer with a pack name or `none`.

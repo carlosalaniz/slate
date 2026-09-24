@@ -1,0 +1,27 @@
+{
+  "name": "slate",
+  "version": "0.1.0",
+  "description": "Workflow runner for long, unattended agent jobs, built as an OpenCode v2 plugin plus a thin CLI.",
+  "type": "module",
+  "private": true,
+  "bin": { "slate": "./bin/slate.ts" },
+  "scripts": {
+    "slate": "bun run bin/slate.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json",
+    "check": "bun run typecheck && bun test"
+  },
+  "engines": { "bun": ">=1.2" },
+  "dependencies": {
+    "@opencode/plugin": "2.0.15",
+    "@opencode/sdk": "2.0.15",
+    "picomatch": "^4.0.2",
+    "yaml": "^2.8.0",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/picomatch": "^4.0.0",
+    "typescript": "^5.9.0"
+  }
+}

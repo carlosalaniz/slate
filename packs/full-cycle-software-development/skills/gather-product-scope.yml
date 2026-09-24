@@ -1,0 +1,5 @@
+description: Write the product scope from the brief.
+reads: [".slate/brief.md", "README.md"]
+prompt: |
+  Write `specs/product-scope.md`. Sections: Summary, Goals, Non-goals, Users, Core flows, Constraints,
+  Acceptance criteria (numbered, each verifiable), Open assumptions. Base everything on the brief.

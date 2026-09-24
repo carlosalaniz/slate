@@ -1,0 +1,14 @@
+description: Split the approved design into tasks with disjoint file scopes.
+reads: ["stories/{story}/TDD.md", "specs/tech-spec.md"]
+prompt: |
+  Write `stories/{story}/tasks.yaml`:
+  ```yaml
+  tasks:
+    - id: {story}-t1
+      title: ...
+      description: ...
+      acceptance: [ ... ]
+      scope: { modify: ["src/feature/**", "tests/feature/**"] }
+  ```
+  Task ids must start with `{story}-`. Scopes must be disjoint (no two tasks may modify the same
+  files); a script checks this. Order tasks so each builds on the previous.

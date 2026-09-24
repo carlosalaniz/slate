@@ -1,0 +1,3 @@
+description: Fails when graph.yaml is missing stories or has a cycle.
+run: "bun $SLATE_PACK/scripts/scripts/check-graph.ts"
+timeout: 30s

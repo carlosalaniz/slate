@@ -1,0 +1,3 @@
+description: Fails when two tasks of a story can modify the same files.
+run: "bun $SLATE_PACK/scripts/scripts/check-task-scopes.ts"
+timeout: 30s

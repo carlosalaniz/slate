@@ -1,0 +1,7 @@
+description: Derive the dependency graph that drives story concurrency.
+reads: ["stories/index.yaml", "specs/tech-spec.md"]
+prompt: |
+  Write `stories/graph.yaml` as `nodes: { <story-id>: [<dependency ids>] }` covering every story in
+  index.yaml. Add dependencies where stories share files or data; independent stories may run in
+  parallel. No cycles.
+  If `.slate/plan-revisions.md` exists, apply every note in it that affects dependencies.

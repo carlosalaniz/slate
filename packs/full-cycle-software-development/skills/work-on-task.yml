@@ -1,0 +1,8 @@
+description: Implement one task, test-first, within its scope.
+reads: ["stories/{story}/TDD.md", "stories/{story}/tasks.yaml", "specs/tech-spec.md", "tasks/{task}/design-{round.design}/verdict-*.md"]
+prompt: |
+  Implement task {task} of story {story} following the TDD and the task's scope. Write tests first,
+  make them pass, run the full test command from the tech spec. If a verdict file from an earlier
+  round of this design exists (`tasks/{task}/design-{round.design}/verdict-*.md`), fix every point in
+  it. Finish by writing `tasks/{task}/design-{round.design}/build-{round}.md`: what changed (files),
+  how to run the tests, known gaps.

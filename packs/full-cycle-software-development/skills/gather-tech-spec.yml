@@ -1,0 +1,6 @@
+description: "Write the technical spec: stack, structure, dependencies, testing."
+reads: [".slate/brief.md", "specs/product-scope.md", "specs/uiux-spec.md", "package.json"]
+prompt: |
+  Write `specs/tech-spec.md`: language and runtime, project layout (directories and their ownership),
+  allowed dependencies (exact list; builders may not add others), data model, testing strategy and
+  the exact command that runs all tests, coding conventions. Keep it short and decisive.

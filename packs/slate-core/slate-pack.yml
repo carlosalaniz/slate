@@ -1,0 +1,10 @@
+slate: 1
+name: slate-core
+version: 0.1.0
+description: "Slate's own agents, skills and prompt templates: intake, pack choice, stuck-loop decisions, step framing, consults and gates."
+fits: "Internal. Slate loads this pack for every job; it is never offered as a workflow."
+inputs: [idea]
+outputs: [brief]
+requires: {}
+config: {}
+phases: { discovery: [], plan: [], build: [], close: [] }

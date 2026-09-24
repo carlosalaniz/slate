@@ -1,0 +1,5 @@
+description: Summarize the whole run for a human.
+reads: ["stories/index.yaml", "stories/*/merged.md", "CHANGELOG.md", ".slate/brief.md"]
+prompt: |
+  Write `RUN-SUMMARY.md`: what was built against the brief, story by story; how to run it and its
+  tests; what was skipped or left open; and the assumptions made along the way.

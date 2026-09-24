@@ -1,0 +1,11 @@
+description: Write or revise the technical design for one story.
+reads: ["stories/index.yaml", "stories/{story}/*.md", "specs/tech-spec.md", "specs/uiux-spec.md", "specs/product-scope.md"]
+prompt: |
+  Write `stories/{story}/TDD.md` for story {story}. Include: goal, files to create or change (exact
+  paths), interfaces (signatures), test plan (test names and what they assert), and step-by-step
+  implementation notes. If a review file exists for this story, address every request in it.
+
+  This is design round {round.design}. Above 1, tasks failed in build under the previous design:
+  read the verdicts from the previous design, `tasks/<task>/design-<previous round>/verdict-*.md`
+  (for unmerged tasks, under `.slate/worktrees/<task>/`), and change the design so those failures
+  cannot recur. Every task is built again under the new design.

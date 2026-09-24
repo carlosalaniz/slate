@@ -1,0 +1,23 @@
+# Short texts an agent reads as a tool result or a permission decision.
+# {name} is filled in; a line whose placeholders are all empty is left out.
+
+# consult tool: refusals (the agent sees these as the tool's error)
+consult-unavailable: consult is not available in this session
+consult-from-consultant: consultants cannot consult (depth is one)
+consult-not-allowed: this step does not allow consults
+consult-wrong-agent: "this step may only consult: {agents}"
+consult-limit: consult limit reached for this step ({max})
+consult-unknown-agent: "unknown agent: {agent}"
+
+# consult tool: the answer handed back to the asking agent
+consult-result: |-
+  {answer}
+
+  (verdict: {verdict}; consult {n}/{max})
+
+# gates: the message attached to the permission decision
+gate-ask: "Slate gate: '{action} {resources}' needs a human decision"
+gate-rejected: "Slate gate rejected '{action} {resources}': {notes}"
+gate-escalated: "Slate gate escalated to a human: {notes}"
+# gates: stands in for a reviewer input file that does not exist
+gate-input-missing: (file missing)

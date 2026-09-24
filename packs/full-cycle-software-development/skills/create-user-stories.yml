@@ -1,0 +1,16 @@
+description: Split the scope into ordered user stories.
+reads: ["specs/product-scope.md", "specs/uiux-spec.md", "specs/tech-spec.md"]
+prompt: |
+  Write `stories/index.yaml`:
+  ```yaml
+  stories:
+    - id: s1            # kebab or short id, unique
+      title: ...
+      description: ...
+      acceptance: [ ... ]   # verifiable statements
+      depends_on: []        # ids of stories that must be merged first
+  ```
+  First story must set up the project skeleton and test runner. Keep stories small enough for one
+  builder to finish in a few tasks.
+  If `.slate/plan-revisions.md` exists, it holds notes from the person who reviews this plan
+  (rejections and revision requests). Apply every note to the stories.

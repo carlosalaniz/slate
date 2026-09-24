@@ -1,0 +1,5 @@
+description: Write the UI/UX spec with text wireframes.
+reads: [".slate/brief.md", "specs/product-scope.md"]
+prompt: |
+  Write `specs/uiux-spec.md`: screens, navigation, states (empty/loading/error/success), and ASCII
+  wireframes under `specs/wireframes/<screen>.md` where helpful. Every screen maps to a core flow.
