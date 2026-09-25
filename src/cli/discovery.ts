@@ -7,7 +7,8 @@ import { loadPack } from "../pack/loader.ts"
 import { listInstalledPacks, findPack, type InstalledPack } from "../pack/registry.ts"
 import { loadCorePack, renderPrompt } from "../engine/core-pack.ts"
 import type { CorePack } from "../engine/types.ts"
-import { isFile, readTextOr, writeJsonAtomic, writeText } from "../util/fs.ts"
+import { rename } from "node:fs/promises"
+import { ensureDir, isFile, readTextOr, removePath, writeJsonAtomic, writeText } from "../util/fs.ts"
 import { CliError } from "./output.ts"
 
 /**
@@ -44,6 +45,12 @@ export interface DiscoveryCheck {
   /** Human-readable list of what is still missing. */
   missing: string[]
 }
+
+/**
+ * How `slate discover` treats an unfinished discovery: reopen the same conversation, start a new one
+ * for the current stage (keeping what was written), or start over (archiving what was written).
+ */
+export type DiscoveryMode = "continue" | "restart" | "new"
 
 export interface DiscoveryDoc {
   file: string
@@ -104,7 +111,7 @@ export async function checkDiscovery(paths: ProjectPaths): Promise<DiscoveryChec
  * is handed to that pack's discovery lead (in place, while the app is open, or right after it
  * closes, reopening it). Returns the outputs check afterwards.
  */
-export async function runDiscovery(paths: ProjectPaths, config: ProjectConfig, opts: { fresh?: boolean } = {}): Promise<DiscoveryCheck> {
+export async function runDiscovery(paths: ProjectPaths, config: ProjectConfig, opts: { mode?: DiscoveryMode } = {}): Promise<DiscoveryCheck> {
   const opencode = Bun.which("opencode")
   if (!opencode) throw new CliError("discovery runs in OpenCode, and `opencode` is not on PATH", "install OpenCode (https://opencode.ai), then run `slate discover`")
   const core = await loadCorePack()
@@ -112,7 +119,20 @@ export async function runDiscovery(paths: ProjectPaths, config: ProjectConfig, o
 
   let record = await readDiscovery(paths)
   let firstMessage: string | undefined
-  if (opts.fresh || record.job || !record.session) {
+  // Nothing to continue (or it belonged to an earlier job): a new conversation.
+  const mode: DiscoveryMode = !record.session || record.job ? "new" : (opts.mode ?? "continue")
+  const chosen = await chosenPack(paths)
+  if (mode === "restart" && record.handoff && chosen.installed) {
+    // A fresh conversation straight with the pack's lead; the brief and documents so far stay.
+    const { lead, docs } = await writePackAgents(paths, config, core, chosen.installed)
+    await scaffoldDocs(paths, docs, core)
+    const session = await createSession(opencode, paths.root, config, lead, chosen.installed.name)
+    record = { session, startedAt: new Date().toISOString(), handoff: { pack: chosen.installed.name, agent: lead, at: new Date().toISOString() } }
+    await writeDiscovery(paths, record)
+    firstMessage = renderPrompt(core, "discovery-handoff", { pack: chosen.installed.name, brief_path: path.relative(paths.root, paths.brief) })
+  } else if (mode !== "continue") {
+    // "new" moves what was written aside; "restart" before the handoff has nothing written to keep.
+    if (mode === "new" && record.session && !record.job) await archiveDiscovery(paths)
     record = { session: await createSession(opencode, paths.root, config), startedAt: new Date().toISOString() }
     await writeDiscovery(paths, record)
     // The app sends the first message itself, so the lead starts the interview on open.
@@ -158,6 +178,38 @@ async function handOff(opencode: string, paths: ProjectPaths, config: ProjectCon
   await api(opencode, paths.root, "session.switchAgent", session, { agent: lead })
   await api(opencode, paths.root, "session.prompt", session, { text: renderPrompt(core, "discovery-handoff", { pack: pack.name, brief_path: path.relative(paths.root, paths.brief) }) })
   await writeDiscovery(paths, { ...(await readDiscovery(paths)), handoff: { pack: pack.name, agent: lead, at: new Date().toISOString() } })
+}
+
+/** The brief and the chosen pack's documents that exist and are not placeholders. */
+export async function discoveryFiles(paths: ProjectPaths): Promise<string[]> {
+  const files: string[] = []
+  if (await isFile(paths.brief)) files.push(path.relative(paths.root, paths.brief))
+  const { installed } = await chosenPack(paths)
+  for (const doc of installed ? await discoveryDocs(installed) : []) {
+    const text = await readTextOr(path.join(paths.root, doc.file), "")
+    if (text.trim() && !text.includes(PLACEHOLDER_MARKER)) files.push(doc.file)
+  }
+  return files
+}
+
+/** Moves the brief and discovery documents to `.slate/archive/discovery-<time>/`; returns that folder. */
+export async function archiveDiscovery(paths: ProjectPaths): Promise<string | undefined> {
+  const files = await discoveryFiles(paths)
+  const { installed } = await chosenPack(paths)
+  // Placeholders are Slate's, not the person's work: they are simply removed.
+  for (const doc of installed ? await discoveryDocs(installed) : []) {
+    const file = path.join(paths.root, doc.file)
+    if ((await readTextOr(file, "")).includes(PLACEHOLDER_MARKER)) await removePath(file)
+  }
+  if (!files.length) return undefined
+  const dir = path.join(paths.slate, "archive", `discovery-${new Date().toISOString().replace(/[:.]/g, "-")}`)
+  for (const f of files) {
+    const from = path.join(paths.root, f)
+    if (!(await isFile(from))) continue
+    await ensureDir(path.dirname(path.join(dir, f)))
+    await rename(from, path.join(dir, f))
+  }
+  return dir
 }
 
 /* ------------------------------------------------------------------ agents */
@@ -243,8 +295,8 @@ async function writeAgentFile(file: string, frontmatter: Record<string, unknown>
 /* ------------------------------------------------------------------ session */
 
 /** Creates the lead's session through the OpenCode service; no model call happens yet. */
-async function createSession(opencode: string, root: string, config: ProjectConfig): Promise<string> {
-  const body = { location: { directory: root }, agent: DISCOVERY_AGENT, model: { providerID: config.provider, id: config.models.high }, title: `Slate discovery: ${config.name}` }
+async function createSession(opencode: string, root: string, config: ProjectConfig, agent = DISCOVERY_AGENT, pack?: string): Promise<string> {
+  const body = { location: { directory: root }, agent, model: { providerID: config.provider, id: config.models.high }, title: `Slate discovery: ${config.name}${pack ? ` (${pack})` : ""}` }
   const proc = Bun.spawn([opencode, "api", "session.create", "--data", JSON.stringify(body)], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
   const code = await proc.exited

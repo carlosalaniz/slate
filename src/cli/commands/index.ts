@@ -9,7 +9,7 @@ import { select, input, optionalNumber, spin, answered, logLine } from "../promp
 import { answerInline, pickAnswer, deliverAnswer, isValidAnswer } from "../questions.ts"
 import { activityLines, type ActivityFile } from "../../opencode/activity.ts"
 import { loadCatalog, defaultTiers, type CatalogModel } from "../../opencode/catalog.ts"
-import { runDiscovery, readDiscovery, writeDiscovery, checkDiscovery, type DiscoveryCheck } from "../discovery.ts"
+import { runDiscovery, readDiscovery, writeDiscovery, checkDiscovery, discoveryFiles, type DiscoveryCheck, type DiscoveryMode } from "../discovery.ts"
 import { ProjectConfigSchema, saveProjectConfig, loadProjectConfig, type ProjectConfig } from "../../config/project.ts"
 import { projectPaths } from "../../config/paths.ts"
 import { ensureGitignore } from "../../config/gitignore.ts"
@@ -155,19 +155,57 @@ directory with --here (it then applies to projects under it). --show prints the 
 
 register(
   "discover",
-  `slate discover [--new]
-Opens the discovery conversation in OpenCode. Slate's discovery agent interviews you, helps you pick
-the workflow pack, then writes .slate/brief.md and the pack's discovery documents (for the reference
-pack: specs/product-scope.md, specs/uiux-spec.md, specs/tech-spec.md). Quit OpenCode when it is done.
-Running it again reopens the same conversation until those files exist; --new starts a fresh one.
+  `slate discover [--continue | --restart | --new]
+Opens the discovery conversation in OpenCode. Slate asks what you are building and which workflow pack
+fits, then hands the conversation to the pack's discovery lead, whose specialists write .slate/brief.md's
+companions (for the reference pack: specs/product-scope.md, specs/uiux-spec.md, specs/tech-spec.md).
+Quit OpenCode when it is done. With an unfinished discovery it asks what to do:
+  --continue  reopen the same conversation
+  --restart   a new conversation for the current step, keeping the brief and documents written so far
+  --new       start over; the brief and documents are moved to .slate/archive/discovery-<time>/
 Discovery always needs you present, so it needs a terminal.`,
   async (argv, out) => {
     const { flags } = parseArgs(["discover", ...argv])
     const p = await requireProject()
     if (!process.stdin.isTTY || out.json) throw new CliError("discovery is a live conversation and needs a terminal", "run `slate discover` in an interactive shell")
-    return reportDiscovery(await runDiscovery(p.paths, p.config, { fresh: bool(flags, "new") }), out)
+    const mode = await chooseDiscoveryMode(p.paths, flags, out, false)
+    if (mode === "skip") return 1
+    return reportDiscovery(await runDiscovery(p.paths, p.config, { mode }), out)
   },
 )
+
+/**
+ * What to do with an unfinished discovery: from --continue/--restart/--new, or asked. Starting over
+ * lists the files that will be archived and asks to confirm. `skip` means do nothing now.
+ */
+async function chooseDiscoveryMode(paths: ReturnType<typeof projectPaths>, flags: Record<string, string | boolean>, out: Output, offerSkip: boolean): Promise<DiscoveryMode | "skip"> {
+  const record = await readDiscovery(paths)
+  const flagged = (["continue", "restart", "new"] as const).filter((m) => bool(flags, m))
+  if (flagged.length > 1) throw new CliError("pick one of --continue, --restart, --new")
+  if (!record.session || record.job) return "new"
+  let mode: DiscoveryMode | "skip" | undefined = flagged[0]
+  if (!mode) {
+    const step = record.handoff ? `the ${record.handoff.pack} discovery lead` : "Slate's first questions"
+    mode = await select<DiscoveryMode | "skip">(
+      "discovery isn't finished",
+      [
+        { value: "continue" as const, label: "continue (Recommended)", hint: "reopen the conversation where you left off" },
+        { value: "restart" as const, label: "restart this step", hint: `new conversation with ${step}; keeps what was written` },
+        { value: "new" as const, label: "start over", hint: "archives the brief and discovery documents" },
+        ...(offerSkip ? [{ value: "skip" as const, label: "not now" }] : []),
+      ],
+      "continue",
+    )
+  }
+  if (mode === "new" && !bool(flags, "new")) {
+    const files = await discoveryFiles(paths)
+    if (files.length) {
+      out.line(`starting over moves these to .slate/archive/:\n${files.map((f) => `  ${f}`).join("\n")}`)
+      if ((await select("start over?", [{ value: "no" }, { value: "yes" }], "no")) === "no") return "skip"
+    }
+  }
+  return mode ?? "continue"
+}
 
 function reportDiscovery(check: DiscoveryCheck, out: Output): number {
   if (check.done) {
@@ -257,6 +295,8 @@ Starts a job from a finished discovery (\`slate discover\`): plan (approval), bu
   --yes                   same as --autonomy unattended
   --detach                run a supervised job in the background too; answer with \`slate inbox\`
   --dry-run               fake runtime, no model calls; may skip discovery and start from --idea or --brief
+With an unfinished discovery it offers to continue it, restart its current step or start over
+(--continue, --restart, --new as in \`slate discover\`).
 Asks for the autonomy when it is not given and there is a terminal. Fails when a job is already open.`,
   async (argv, out) => {
     const { flags } = parseArgs(["start", ...argv])
@@ -272,8 +312,8 @@ Asks for the autonomy when it is not given and there is a terminal. Fails when a
       // Dry runs can still exercise intake from an idea or a brief.
       Object.assign(opts, { idea: str(flags, "idea"), briefPath: str(flags, "brief"), packRef: str(flags, "pack") })
     } else if (!check.done) {
-      const open = interactive && (await select("discovery isn't finished. Open it in OpenCode now?", [{ value: "yes" }, { value: "no" }], "yes")) === "yes"
-      if (open) check = await runDiscovery(p.paths, p.config, { fresh: !!record.job })
+      const mode = interactive ? await chooseDiscoveryMode(p.paths, flags, out, true) : "skip"
+      if (mode !== "skip") check = await runDiscovery(p.paths, p.config, { mode })
       if (!check.done) throw new CliError(`discovery isn't finished; missing: ${check.missing.join(", ")}`, "run `slate discover`, then `slate start`")
       record = await readDiscovery(p.paths)
     }

@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { projectPaths } from "../src/config/paths.ts"
 import { findPack } from "../src/pack/registry.ts"
 import YAML from "yaml"
-import { checkDiscovery, discoveryDocs, writeCoreLead, writePackAgents, scaffoldDocs } from "../src/cli/discovery.ts"
+import { checkDiscovery, discoveryDocs, writeCoreLead, writePackAgents, scaffoldDocs, discoveryFiles, archiveDiscovery } from "../src/cli/discovery.ts"
 import { loadCorePack } from "../src/engine/core-pack.ts"
 import { createJob, runForeground, buildEngine } from "../src/cli/commands/run-job.ts"
 import { Output } from "../src/cli/output.ts"
@@ -127,5 +127,27 @@ describe("autonomy", () => {
     // `slate continue` passes no --yes; the saved autonomy still auto-approves.
     const engine = await buildEngine(p, store, { dryRun: true, autoApprove: false, quiet: true }, new Output(true))
     expect(engine.o.autoApprove).toBe(true)
+  })
+})
+
+describe("starting discovery over", () => {
+  test("archives the brief and written documents, drops placeholders, and leaves nothing behind", async () => {
+    const root = await tmpProject()
+    const paths = projectPaths(root)
+    const core = await loadCorePack()
+    const { docs } = await writePackAgents(paths, testConfig(), core, (await findPack("full-cycle-software-development"))!)
+    await write(root, { ".slate/brief.md": brief("full-cycle-software-development"), "specs/product-scope.md": "written with the user\n" })
+    await scaffoldDocs(paths, docs, core) // uiux-spec and tech-spec become placeholders
+    // What "start over" lists for confirmation: the person's work, not Slate's placeholders.
+    expect(await discoveryFiles(paths)).toEqual([".slate/brief.md", "specs/product-scope.md"])
+
+    const dir = (await archiveDiscovery(paths))!
+    expect(dir).toContain(".slate/archive/discovery-")
+    expect(await Bun.file(path.join(dir, "specs/product-scope.md")).text()).toBe("written with the user\n")
+    expect(await Bun.file(path.join(dir, ".slate/brief.md")).exists()).toBe(true)
+    // Placeholders were Slate's, not the person's: removed, not archived.
+    expect(await Bun.file(path.join(dir, "specs/tech-spec.md")).exists()).toBe(false)
+    for (const f of [".slate/brief.md", ...SPECS]) expect(await Bun.file(path.join(root, f)).exists()).toBe(false)
+    expect(await checkDiscovery(paths)).toMatchObject({ done: false, missing: [".slate/brief.md"] })
   })
 })
