@@ -14,6 +14,9 @@ bun run slate --help
 bun run check            # typecheck + tests
 ```
 
+Every option is documented in [`config.example.yml`](./config.example.yml) — copy it to
+`slate.config.yml` in your project root, or generate one with `slate init`.
+
 ## Quick start
 
 ```
