@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { loadPack, PackError } from "../src/pack/loader.ts"
+import { loadPack, PackError, validatePack } from "../src/pack/loader.ts"
+import { ManifestSchema } from "../src/pack/schema.ts"
 import { validatePackDir, listInstalledPacks } from "../src/pack/registry.ts"
 import { tmpProject, writePack, BASIC_AGENTS, BASIC_SKILLS, referencePackDir } from "./helpers.ts"
 
@@ -10,7 +11,7 @@ describe("pack loader", () => {
     const r = await validatePackDir(referencePackDir())
     expect(r.ok).toBe(true)
     if (r.ok) {
-      expect(Object.keys(r.pack.agents).sort()).toEqual(["analyst", "architect", "builder", "checker", "integrator", "product-owner", "product-owner-consultant", "reviewer", "staff-engineer", "uiux-designer"])
+      expect(Object.keys(r.pack.agents).sort()).toEqual(["analyst", "architect", "builder", "checker", "discovery-lead", "integrator", "product-owner", "product-owner-consultant", "reviewer", "staff-engineer", "uiux-designer"])
       expect(Object.keys(r.pack.skills)).toHaveLength(12)
       const loop = r.pack.manifest.phases.build[0]!
       expect(loop.type).toBe("loop")
@@ -80,5 +81,12 @@ describe("pack loader", () => {
     const dir = await tmpProject()
     const p = await writePack(dir, manifest([{ id: "l", type: "loop", until: { script: "nope" }, max: "${nope}", steps: [{ id: "m", type: "skill", skill: "make", by: "worker", writes: [] }] }]))
     await expect(loadPack(p)).rejects.toThrow(/unknown config variable|not a known script/)
+  })
+})
+
+describe("discovery lead", () => {
+  test("must name a worker agent of the pack", async () => {
+    const manifest = ManifestSchema.parse({ slate: 1, name: "p", version: "1.0.0", discovery: { lead: "missing" }, phases: {} })
+    expect(validatePack(manifest, {}, {}, {})).toContain("discovery.lead: unknown agent 'missing'")
   })
 })

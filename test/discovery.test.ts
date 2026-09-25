@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { projectPaths } from "../src/config/paths.ts"
 import { findPack } from "../src/pack/registry.ts"
 import YAML from "yaml"
-import { checkDiscovery, discoveryDocs, writeAgents, scaffoldChosenPack } from "../src/cli/discovery.ts"
+import { checkDiscovery, discoveryDocs, writeCoreLead, writePackAgents, scaffoldDocs } from "../src/cli/discovery.ts"
 import { loadCorePack } from "../src/engine/core-pack.ts"
 import { createJob, runForeground, buildEngine } from "../src/cli/commands/run-job.ts"
 import { Output } from "../src/cli/output.ts"
@@ -68,39 +68,50 @@ describe("discovery agents and placeholders", () => {
     const text = await Bun.file(file).text()
     return { data: YAML.parse(/^---\n([\s\S]*?)\n---/.exec(text)![1]!), body: text.replace(/^---\n[\s\S]*?\n---\n/, "") }
   }
+  const config = testConfig({ provider: "openrouter", models: { low: "a/low", medium: "a/mid", high: "a/high" } })
 
-  test("writes the lead (brief only, asks with the question tool) and one subagent per drafting agent", async () => {
+  test("the core lead only asks what to build and which installed pack; it writes the brief only", async () => {
     const root = await tmpProject()
     const paths = projectPaths(root)
-    const config = testConfig({ provider: "openrouter", models: { low: "a/low", medium: "a/mid", high: "a/high" } })
-    const byPack = await writeAgents(paths, config, await loadCorePack())
-    const docs = byPack.get("full-cycle-software-development")!.docs
-    expect(docs.map((d) => [d.file, d.subagent])).toEqual([["specs/product-scope.md", "slate-analyst"], ["specs/uiux-spec.md", "slate-uiux-designer"], ["specs/tech-spec.md", "slate-architect"]])
-
+    await writeCoreLead(paths, config, await loadCorePack())
     const lead = await frontOf(path.join(root, ".opencode/agents/slate-discovery.md"))
     expect(lead.data).toMatchObject({ mode: "primary", model: "openrouter/a/high" })
-    expect(lead.data.permissions).toContainEqual({ action: "question", resource: "*", effect: "allow" })
     expect(lead.data.permissions).toContainEqual({ action: "edit", resource: ".slate/brief.md", effect: "allow" })
-    expect(lead.body).toContain("`slate-analyst`")
-    expect(lead.body).toContain("`question` tool")
+    expect(lead.data.permissions).toContainEqual({ action: "subagent", resource: "*", effect: "deny" })
     // The pack question can only offer installed packs, with their own fits line.
-    expect(lead.body).toContain("- label: full-cycle-software-development\n  description: Building or extending a software product")
+    expect(lead.body).toContain("- label: full-cycle-software-development\n     description: Building or extending a software product")
+    // No pack's specialists are written until a pack is chosen.
+    expect(await Bun.file(path.join(root, ".opencode/agents/slate-analyst.md")).exists()).toBe(false)
+  })
+
+  test("the chosen pack's lead gets the pack's prompt plus Slate's rules; specialists stay in scope", async () => {
+    const root = await tmpProject()
+    const paths = projectPaths(root)
+    const pack = (await findPack("full-cycle-software-development"))!
+    const { lead, docs } = await writePackAgents(paths, config, await loadCorePack(), pack)
+    expect(lead).toBe("slate-full-cycle-software-development")
+    expect(docs.map((d) => [d.file, d.subagent])).toEqual([["specs/product-scope.md", "slate-analyst"], ["specs/uiux-spec.md", "slate-uiux-designer"], ["specs/tech-spec.md", "slate-architect"]])
+
+    const packLead = await frontOf(path.join(root, `.opencode/agents/${lead}.md`))
+    expect(packLead.data).toMatchObject({ mode: "primary", model: "openrouter/a/high" })
+    expect(packLead.data.permissions).toContainEqual({ action: "subagent", resource: "*", effect: "allow" })
+    expect(packLead.data.permissions).toContainEqual({ action: "edit", resource: ".slate/brief.md", effect: "allow" })
+    expect(packLead.body).toContain("You are the discovery lead for a software product") // the pack's own prompt
+    expect(packLead.body).toContain("`specs/product-scope.md`: subagent `slate-analyst`") // Slate's rules
 
     const analyst = await frontOf(path.join(root, ".opencode/agents/slate-analyst.md"))
     expect(analyst.data.mode).toBe("subagent")
     expect(analyst.data.permissions).toContainEqual({ action: "question", resource: "*", effect: "deny" })
     expect(analyst.data.permissions).toContainEqual({ action: "edit", resource: "specs/**", effect: "allow" })
-    expect(analyst.body).toContain("product analyst")
   })
 
-  test("naming the pack in the brief creates placeholders, which still count as missing", async () => {
+  test("placeholders fill the missing documents and still count as missing", async () => {
     const root = await tmpProject()
     const paths = projectPaths(root)
     const core = await loadCorePack()
-    const byPack = await writeAgents(paths, testConfig(), core)
-    expect(await scaffoldChosenPack(paths, byPack, core)).toBe(false)
+    const { docs } = await writePackAgents(paths, testConfig(), core, (await findPack("full-cycle-software-development"))!)
     await write(root, { ".slate/brief.md": brief("full-cycle-software-development"), "specs/tech-spec.md": "already written\n" })
-    expect(await scaffoldChosenPack(paths, byPack, core)).toBe(true)
+    await scaffoldDocs(paths, docs, core)
     expect(await Bun.file(path.join(root, "specs/product-scope.md")).text()).toContain("slate-analyst")
     expect(await Bun.file(path.join(root, "specs/tech-spec.md")).text()).toBe("already written\n")
     expect(await checkDiscovery(paths)).toMatchObject({ done: false, missing: SPECS.slice(0, 2) })

@@ -117,6 +117,9 @@ export function validatePack(manifest: Manifest, agents: Record<string, AgentSpe
       if (typeof step.max === "number" && step.max < 1) problems.push(`${where}: max must be at least 1`)
     }
   }
+  const lead = manifest.discovery.lead
+  if (lead && !agents[lead]) problems.push(`discovery.lead: unknown agent '${lead}'`)
+  else if (lead && agents[lead]!.role !== "worker") problems.push(`discovery.lead: agent '${lead}' has role ${agents[lead]!.role}; the discovery lead must be a worker`)
   for (const [id, a] of Object.entries(agents)) {
     if (a.role === "consultant" && (a.scope.modify?.length ?? 0) > 0) problems.push(`agents/${id}: consultants cannot declare scope.modify`)
   }

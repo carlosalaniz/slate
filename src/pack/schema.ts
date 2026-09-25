@@ -157,6 +157,12 @@ export const ManifestSchema = z.object({
   outputs: z.array(z.string()).default([]),
   requires: z.record(z.string(), z.string()).default({}),
   config: z.record(z.string(), z.unknown()).default({}),
+  /**
+   * Live discovery with the person (`slate discover`): once they pick this pack, the conversation is
+   * handed to `lead`, which runs the rest of the interview and delegates the discovery documents
+   * (the files written by skill steps in phases.discovery) to the agents that own them.
+   */
+  discovery: z.object({ lead: Id.optional() }).default({}),
   phases: z.object({
     discovery: z.array(StepSchema).default([]),
     plan: z.array(StepSchema).default([]),

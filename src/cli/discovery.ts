@@ -11,13 +11,14 @@ import { isFile, readTextOr, writeJsonAtomic, writeText } from "../util/fs.ts"
 import { CliError } from "./output.ts"
 
 /**
- * Discovery is a live conversation in the user's own OpenCode. Slate writes agents into the
- * project's `.opencode/agents/`: its discovery lead (primary; asks with the `question` tool, may
- * only write the brief) and one subagent per pack agent that drafts a discovery document. It
- * creates a session for the lead through the OpenCode service, then opens the OpenCode app on it
- * with the first message, so the lead starts the interview. While the app is open, Slate watches
- * the brief: once it names a pack, the pack's discovery documents are created as placeholders.
- * Discovery is done when the brief names an installed pack and every document is written.
+ * Discovery is a live conversation in the user's own OpenCode, in two parts:
+ * 1. Slate's core lead (`.opencode/agents/slate-discovery.md`) asks what the person is building and
+ *    which installed pack fits, then writes the start of the brief naming the pack.
+ * 2. Slate hands the same session to the pack's own discovery lead (`slate-<pack>`: the pack's
+ *    `discovery.lead` prompt plus Slate's rules), which runs the rest of the interview and has the
+ *    pack's specialists (`slate-<agent>` subagents) write the discovery documents.
+ * Slate creates the session through the OpenCode service and opens the app on it with the first
+ * message. Discovery is done when the brief names an installed pack and every document is written.
  */
 
 export const DISCOVERY_AGENT = "slate-discovery"
@@ -31,6 +32,8 @@ export interface DiscoveryRecord {
   /** Set once the outputs check passes: the chosen pack as name@version. */
   pack?: string
   completedAt?: string
+  /** Set when the session was handed to the chosen pack's discovery lead. */
+  handoff?: { pack: string; agent: string; at: string }
   /** The job that consumed this discovery; the next job needs a new one. */
   job?: string
 }
@@ -97,94 +100,130 @@ export async function checkDiscovery(paths: ProjectPaths): Promise<DiscoveryChec
 
 /**
  * Opens (or reopens) the discovery conversation in OpenCode and waits for the user to quit it.
- * Returns the outputs check afterwards.
+ * Slate's core lead asks what to build and which pack; once the brief names the pack, the session
+ * is handed to that pack's discovery lead (in place, while the app is open, or right after it
+ * closes, reopening it). Returns the outputs check afterwards.
  */
 export async function runDiscovery(paths: ProjectPaths, config: ProjectConfig, opts: { fresh?: boolean } = {}): Promise<DiscoveryCheck> {
   const opencode = Bun.which("opencode")
   if (!opencode) throw new CliError("discovery runs in OpenCode, and `opencode` is not on PATH", "install OpenCode (https://opencode.ai), then run `slate discover`")
   const core = await loadCorePack()
-  const docsByPack = await writeAgents(paths, config, core)
+  await writeCoreLead(paths, config, core)
 
   let record = await readDiscovery(paths)
-  const args = [opencode]
+  let firstMessage: string | undefined
   if (opts.fresh || record.job || !record.session) {
     record = { session: await createSession(opencode, paths.root, config), startedAt: new Date().toISOString() }
     await writeDiscovery(paths, record)
     // The app sends the first message itself, so the lead starts the interview on open.
-    args.push("--session", record.session!, "--prompt", renderPrompt(core, "discovery-start", { project: config.name }))
-  } else {
-    args.push("--session", record.session!)
+    firstMessage = renderPrompt(core, "discovery-start", { project: config.name })
   }
-  args.push(paths.root)
+  const session = record.session!
+  const handedTo = async () => (await readDiscovery(paths)).handoff?.pack
 
-  const stopWatching = watchPackChoice(paths, docsByPack, core)
-  try {
-    const proc = Bun.spawn(args, { cwd: paths.root, stdio: ["inherit", "inherit", "inherit"] })
-    await proc.exited
-  } finally {
-    stopWatching()
+  while (true) {
+    // Reopening after the handoff: refresh the pack's agents so edits to the pack apply.
+    const chosen = await chosenPack(paths)
+    if (chosen.installed && (await handedTo()) === chosen.name) await writePackAgents(paths, config, core, chosen.installed)
+    const stopWatching = watchPackChoice(paths, async (pack) => {
+      if ((await handedTo()) !== pack.name) await handOff(opencode, paths, config, core, session, pack)
+    })
+    try {
+      const args = [opencode, "--session", session, ...(firstMessage ? ["--prompt", firstMessage] : []), paths.root]
+      firstMessage = undefined
+      await Bun.spawn(args, { cwd: paths.root, stdio: ["inherit", "inherit", "inherit"] }).exited
+    } finally {
+      stopWatching()
+    }
+    // Picked just before quitting, or the in-app switch failed: hand off now and reopen the app.
+    const after = await chosenPack(paths)
+    if (!after.installed || (await handedTo()) === after.name) break
+    await handOff(opencode, paths, config, core, session, after.installed)
   }
-  await scaffoldChosenPack(paths, docsByPack, core)
 
   const check = await checkDiscovery(paths)
-  if (check.done) await writeDiscovery(paths, { ...record, pack: `${check.pack!.name}@${check.pack!.version}`, completedAt: new Date().toISOString() })
+  if (check.done) await writeDiscovery(paths, { ...(await readDiscovery(paths)), pack: `${check.pack!.name}@${check.pack!.version}`, completedAt: new Date().toISOString() })
   return check
+}
+
+/**
+ * Hands the session to the pack's discovery lead: writes the pack's agents and document
+ * placeholders, switches the session's agent and sends the lead its first message.
+ */
+async function handOff(opencode: string, paths: ProjectPaths, config: ProjectConfig, core: CorePack, session: string, pack: InstalledPack): Promise<void> {
+  const { lead, docs } = await writePackAgents(paths, config, core, pack)
+  await scaffoldDocs(paths, docs, core)
+  // OpenCode reloads agent files shortly after they change; give it a moment to see the new lead.
+  await Bun.sleep(1500)
+  await api(opencode, paths.root, "session.switchAgent", session, { agent: lead })
+  await api(opencode, paths.root, "session.prompt", session, { text: renderPrompt(core, "discovery-handoff", { pack: pack.name, brief_path: path.relative(paths.root, paths.brief) }) })
+  await writeDiscovery(paths, { ...(await readDiscovery(paths)), handoff: { pack: pack.name, agent: lead, at: new Date().toISOString() } })
 }
 
 /* ------------------------------------------------------------------ agents */
 
 type PermissionRule = { action: string; resource: string; effect: "allow" | "deny" | "ask" }
-export type PackDocs = Map<string, { pack: InstalledPack; docs: (DiscoveryDoc & { subagent: string })[] }>
+export type NamedDoc = DiscoveryDoc & { subagent: string }
 
-/**
- * Writes the discovery lead and one subagent per drafting pack agent into `.opencode/agents/`.
- * Subagents are named `slate-<agent>`, or `slate-<pack>-<agent>` when two packs share an agent id.
- */
-export async function writeAgents(paths: ProjectPaths, config: ProjectConfig, core: CorePack): Promise<PackDocs> {
-  // `pack:` in slate.config.yml limits discovery to that pack.
+/** OpenCode checks files inside the project by their project-relative path, so rules use those. */
+const relTo = (paths: ProjectPaths) => (file: string) => path.relative(paths.root, path.resolve(paths.root, file)).replaceAll("\\", "/")
+
+/** Slate's core lead: asks what to build and which of the installed packs; writes only the brief. */
+export async function writeCoreLead(paths: ProjectPaths, config: ProjectConfig, core: CorePack): Promise<void> {
+  // `pack:` in slate.config.yml limits the choice to that pack.
   const pinned = config.pack ? await findPack(config.pack, paths.root) : undefined
   if (config.pack && !pinned) throw new CliError(`pack '${config.pack}' from slate.config.yml is not installed`, "run `slate pack list`, or `slate pack add <dir>`")
   const packs = pinned ? [pinned] : (await listInstalledPacks(paths.root)).filter((p) => p.version !== "invalid")
   if (!packs.length) throw new CliError("no workflow pack is installed", "install one with `slate pack add <dir>`, then run `slate discover`")
+  const rel = relTo(paths)
+  // The pack question's options, verbatim, so the lead cannot offer packs that are not installed.
+  const packOptions = packs.map((p) => `   - label: ${p.name}\n     description: ${p.fits || p.description}`).join("\n")
+  const body = renderPrompt(core, "discovery-agent", { project: config.name, brief_path: rel(paths.brief), pack_options: packOptions })
+  const permissions: PermissionRule[] = [
+    { action: "question", resource: "*", effect: "allow" },
+    { action: "subagent", resource: "*", effect: "deny" },
+    { action: "shell", resource: "*", effect: "deny" },
+    { action: "edit", resource: "*", effect: "deny" },
+    { action: "edit", resource: rel(paths.brief), effect: "allow" },
+  ]
+  await writeAgentFile(path.join(paths.root, ".opencode", "agents", `${DISCOVERY_AGENT}.md`), { description: "Slate discovery: what you are building and which workflow pack; then the pack takes over.", mode: "primary", model: `${config.provider}/${config.models.high}`, permissions }, body)
+}
 
-  const raw = await Promise.all(packs.map(async (pack) => ({ pack, docs: await discoveryDocs(pack) })))
-  const packsPerAgent = new Map<string, Set<string>>()
-  for (const { pack, docs } of raw) for (const d of docs) packsPerAgent.set(d.agent.id, (packsPerAgent.get(d.agent.id) ?? new Set()).add(pack.name))
-  const nameOf = (pack: string, agent: string) => (packsPerAgent.get(agent)!.size > 1 ? `slate-${pack}-${agent}` : `slate-${agent}`)
-
-  const byPack: PackDocs = new Map()
+/**
+ * The chosen pack's discovery agents: its lead (`slate-<pack>`, primary; the pack's
+ * `discovery.lead` prompt plus Slate's rules) and one subagent per agent that drafts a document
+ * (`slate-<agent>`). Returns the lead's name and the documents with their subagents.
+ */
+export async function writePackAgents(paths: ProjectPaths, config: ProjectConfig, core: CorePack, pack: InstalledPack): Promise<{ lead: string; docs: NamedDoc[] }> {
+  const loaded = await loadPack(pack.dir)
+  const docs: NamedDoc[] = (await discoveryDocs(pack)).map((d) => ({ ...d, subagent: `slate-${d.agent.id}` }))
   const agentsDir = path.join(paths.root, ".opencode", "agents")
   const model = (tier: "low" | "medium" | "high") => `${config.provider}/${config.models[tier]}`
-  // OpenCode checks files inside the project by their project-relative path, so rules use those.
-  const rel = (file: string) => path.relative(paths.root, path.resolve(paths.root, file)).replaceAll("\\", "/")
-  for (const { pack, docs } of raw) {
-    const named = docs.map((d) => ({ ...d, subagent: nameOf(pack.name, d.agent.id) }))
-    byPack.set(pack.name, { pack, docs: named })
-    for (const [subagent, agent] of new Map(named.map((d) => [d.subagent, d.agent]))) {
-      // Subagents run without the person: no questions, no nesting, no shell; edits stay in scope.
-      const editable = agent.scope.modify?.length ? agent.scope.modify : named.filter((d) => d.subagent === subagent).map((d) => d.file)
-      const permissions: PermissionRule[] = [
-        ...(agent.permissions as PermissionRule[]),
-        { action: "question", resource: "*", effect: "deny" },
-        { action: "subagent", resource: "*", effect: "deny" },
-        { action: "shell", resource: "*", effect: "deny" },
-        { action: "edit", resource: "*", effect: "deny" },
-        ...editable.map((g): PermissionRule => ({ action: "edit", resource: rel(g), effect: "allow" })),
-      ]
-      const body = renderPrompt(core, "discovery-subagent", { agent_prompt: agent.prompt.trim(), project: config.name })
-      await writeAgentFile(path.join(agentsDir, `${subagent}.md`), { description: `${agent.description} (Slate discovery, pack ${pack.name})`, mode: "subagent", model: model(agent.model), permissions }, body)
-    }
+  const rel = relTo(paths)
+
+  for (const [subagent, agent] of new Map(docs.map((d) => [d.subagent, d.agent]))) {
+    // Subagents run without the person: no questions, no nesting, no shell; edits stay in scope.
+    const editable = agent.scope.modify?.length ? agent.scope.modify : docs.filter((d) => d.subagent === subagent).map((d) => d.file)
+    const permissions: PermissionRule[] = [
+      ...(agent.permissions as PermissionRule[]),
+      { action: "question", resource: "*", effect: "deny" },
+      { action: "subagent", resource: "*", effect: "deny" },
+      { action: "shell", resource: "*", effect: "deny" },
+      { action: "edit", resource: "*", effect: "deny" },
+      ...editable.map((g): PermissionRule => ({ action: "edit", resource: rel(g), effect: "allow" })),
+    ]
+    const body = renderPrompt(core, "discovery-subagent", { agent_prompt: agent.prompt.trim(), project: config.name })
+    await writeAgentFile(path.join(agentsDir, `${subagent}.md`), { description: `${agent.description} (Slate discovery, pack ${pack.name})`, mode: "subagent", model: model(agent.model), permissions }, body)
   }
 
-  const sections = [...byPack.values()].map(({ pack, docs }) =>
-    [
-      `## ${pack.name}`,
-      `Fits: ${pack.fits || pack.description}`,
-      docs.length ? "Discovery documents, in order:" : "Discovery documents: none beyond the brief.",
-      ...docs.map((d) => `- \`${d.file}\`, drafted by subagent \`${d.subagent}\`. Instructions:\n  ${d.instructions.split("\n").join("\n  ")}`),
-    ].join("\n"),
-  )
-  const lead: PermissionRule[] = [
+  const leadSpec = loaded.manifest.discovery.lead ? loaded.agents[loaded.manifest.discovery.lead] : undefined
+  const docList = docs.length
+    ? ["Discovery documents, in order:", ...docs.map((d) => `  - \`${d.file}\`: subagent \`${d.subagent}\`. Instructions:\n    ${d.instructions.split("\n").join("\n    ")}`)].join("\n")
+    : "This pack needs no discovery documents beyond the brief."
+  const rules = renderPrompt(core, "discovery-pack-lead", { pack: pack.name, brief_path: rel(paths.brief), docs: docList })
+  const body = [leadSpec?.prompt.trim(), rules].filter(Boolean).join("\n\n")
+  const lead = `slate-${pack.name}`
+  const permissions: PermissionRule[] = [
     { action: "question", resource: "*", effect: "allow" },
     { action: "subagent", resource: "*", effect: "allow" },
     { action: "shell", resource: "*", effect: "deny" },
@@ -192,11 +231,8 @@ export async function writeAgents(paths: ProjectPaths, config: ProjectConfig, co
     { action: "edit", resource: "*", effect: "deny" },
     { action: "edit", resource: rel(paths.brief), effect: "allow" },
   ]
-  // The pack question's options, verbatim, so the lead cannot offer packs that are not installed.
-  const packOptions = [...byPack.values()].map(({ pack }) => `- label: ${pack.name}\n  description: ${pack.fits || pack.description}`).join("\n")
-  const body = renderPrompt(core, "discovery-agent", { project: config.name, brief_path: path.relative(paths.root, paths.brief), packs: sections.join("\n\n"), pack_options: packOptions })
-  await writeAgentFile(path.join(agentsDir, `${DISCOVERY_AGENT}.md`), { description: "Slate discovery. Interviews you about what to build, picks the pack, and has its specialists write the discovery docs.", mode: "primary", model: model("high"), permissions: lead }, body)
-  return byPack
+  await writeAgentFile(path.join(agentsDir, `${lead}.md`), { description: leadSpec?.description || `Discovery for the ${pack.name} pack.`, mode: "primary", model: model(leadSpec?.model ?? "high"), permissions }, body)
+  return { lead, docs }
 }
 
 /** An OpenCode agent file: YAML frontmatter (agent config) and the system prompt as the body. */
@@ -221,19 +257,30 @@ async function createSession(opencode: string, root: string, config: ProjectConf
   throw new CliError(`could not create the discovery session in OpenCode (exit ${code}): ${(stderr || stdout).trim().split("\n").slice(0, 3).join(" ").slice(0, 400)}`, "check that `opencode` works in this directory (`opencode service status`), then run `slate discover`")
 }
 
+/** Calls an OpenCode service operation on one session; throws with its error output on failure. */
+async function api(opencode: string, root: string, operation: string, sessionID: string, data: Record<string, unknown>): Promise<void> {
+  const proc = Bun.spawn([opencode, "api", operation, "--param", `sessionID=${sessionID}`, "--data", JSON.stringify(data)], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited])
+  if (code !== 0) throw new Error(`opencode api ${operation} failed (exit ${code}): ${stderr.trim().split("\n")[0]}`)
+}
+
 /* --------------------------------------------------------------- pack choice */
 
-/** Polls the brief while the app is open; scaffolds the chosen pack's documents once it names one. */
-function watchPackChoice(paths: ProjectPaths, docsByPack: PackDocs, core: CorePack): () => void {
+/** Polls the brief while the app is open and calls `onPack` once it names an installed pack. */
+function watchPackChoice(paths: ProjectPaths, onPack: (pack: InstalledPack) => Promise<void>): () => void {
   let done = false
   let busy = false
   const timer = setInterval(async () => {
     if (done || busy) return
     busy = true
     try {
-      done = await scaffoldChosenPack(paths, docsByPack, core)
+      const { installed } = await chosenPack(paths)
+      if (installed) {
+        await onPack(installed)
+        done = true
+      }
     } catch {
-      /* try again on the next tick */
+      /* try again on the next tick; after the app closes Slate hands off again if needed */
     } finally {
       busy = false
     }
@@ -241,17 +288,13 @@ function watchPackChoice(paths: ProjectPaths, docsByPack: PackDocs, core: CorePa
   return () => clearInterval(timer)
 }
 
-/** Creates placeholders for the chosen pack's missing documents. Returns true once a pack is chosen. */
-export async function scaffoldChosenPack(paths: ProjectPaths, docsByPack: PackDocs, core: CorePack): Promise<boolean> {
-  const { name } = await chosenPack(paths)
-  const entry = name ? docsByPack.get(name) : undefined
-  if (!entry) return false
-  for (const doc of entry.docs) {
+/** Creates placeholders for the documents that do not exist yet. */
+export async function scaffoldDocs(paths: ProjectPaths, docs: NamedDoc[], core: CorePack): Promise<void> {
+  for (const doc of docs) {
     const file = path.join(paths.root, doc.file)
     if (await isFile(file)) continue
     await writeText(file, renderPrompt(core, "discovery-stub", { marker: PLACEHOLDER_MARKER, file: doc.file, agent: `\`${doc.subagent}\``, instructions: doc.instructions }) + "\n")
   }
-  return true
 }
 
 /** The pack named in the brief's frontmatter, and whether it is installed. */

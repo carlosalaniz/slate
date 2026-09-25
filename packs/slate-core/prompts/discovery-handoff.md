@@ -1,0 +1,1 @@
+Slate: the person chose the "{pack}" pack and `{brief_path}` has the start of the brief. You are now leading discovery for this pack. Introduce yourself in one sentence, then continue the interview with your first question.

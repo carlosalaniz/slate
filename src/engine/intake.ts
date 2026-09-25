@@ -17,7 +17,7 @@ import { proposePackOffline, renderPrompt } from "./core-pack.ts"
 
 /** Intake needs a runtime before any pack is chosen; it runs against an empty pack. */
 const NO_PACK: Omit<LoadedPack, "dir"> = {
-  manifest: { slate: 1, name: "intake", version: "0.0.0", description: "", fits: "", inputs: [], outputs: [], requires: {}, config: {}, phases: { discovery: [], plan: [], build: [], close: [] } },
+  manifest: { slate: 1, name: "intake", version: "0.0.0", description: "", fits: "", inputs: [], outputs: [], requires: {}, config: {}, discovery: {}, phases: { discovery: [], plan: [], build: [], close: [] } },
   agents: {},
   skills: {},
   scripts: {},

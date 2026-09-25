@@ -19,6 +19,10 @@ config:
   max_tasks_per_story: 20
   story_concurrency: 1
 
+# Live discovery: after the person picks this pack, discovery-lead takes over the conversation and
+# has each specialist draft its document (product scope, UI/UX spec, tech spec) with their answers.
+discovery: { lead: discovery-lead }
+
 phases:
   discovery:
     - { id: product-scope, type: skill, skill: gather-product-scope, by: analyst,

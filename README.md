@@ -146,6 +146,12 @@ Facts learned in the spike that the adapter depends on:
 
 ## Pack schema
 
+Discovery: `slate discover` starts with Slate's own lead, which asks what the person is building and
+which installed pack fits. Once they pick yours, the same OpenCode conversation is handed to the
+agent named in `discovery: { lead: <agent> }` (its prompt plus Slate's rules); it runs the rest of
+the interview and has the agents behind your `phases.discovery` skill steps write those documents.
+Without a `lead`, a generic one with Slate's rules takes over.
+
 See `packs/full-cycle-software-development/slate-pack.yml` for a complete example. Step types:
 `skill` (`skill`, `by`, `model?`, `writes?`, `result?`, `scope?`, `consult?`, `gates?`), `loop`
 (`over`/`until`, `as`, `max`, `concurrency?`, `on_exhausted?` = `ask-human | ask-decision-agent | fail`,
