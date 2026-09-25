@@ -2,7 +2,9 @@ description: Merges task worktrees into the main branch and keeps the changelog.
 role: worker
 model: medium
 scope: { modify: ["**"] }
+# Merges and runs the full suite; only pushing needs a human (the last matching rule wins).
 permissions:
+  - { action: shell, resource: "*", effect: allow }
   - { action: shell, resource: "git push *", effect: ask }
 prompt: |
   You are the integrator. You merge the story's task branches (slate/<task>) into the current branch,

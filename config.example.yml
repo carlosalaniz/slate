@@ -59,3 +59,13 @@ config:
   max_stories: 50
   max_tasks_per_story: 20
   story_concurrency: 1        # stories built in parallel
+# ---------------------------------------------------------------------------------------------
+# .slate_defaults.yml (separate file): answers for `slate init`, so trying Slate out does not mean
+# answering the same prompts every time. Put it in the project directory, any parent, or your home
+# directory; the nearest one wins and flags still override it. Same keys as above, all optional,
+# plus `discover: false` to skip opening discovery. Unknown keys are an error. Example:
+#
+#   provider: openrouter
+#   models: { low: deepseek/deepseek-v4-flash, medium: anthropic/claude-sonnet-5, high: anthropic/claude-opus-5.5 }
+#   budget: { job: 0, per_task: 5 }
+#   discover: false

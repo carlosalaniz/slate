@@ -207,3 +207,27 @@ export async function spin<T>(message: string, work: Promise<T>): Promise<T> {
     write(`\r\x1b[0J${SHOW_CURSOR}`)
   }
 }
+
+/*
+ * Output gate: log lines printed while a prompt is on screen would break its in-place redraw, so
+ * they wait until the prompt is done.
+ */
+let held: string[] | undefined
+
+/** Prints a log line now, or after the current prompt if one is open. */
+export function logLine(text: string): void {
+  if (held) held.push(text)
+  else write(text + "\n")
+}
+
+/** Runs a prompt with log output held back, then prints what arrived meanwhile. */
+export async function withHeldOutput<T>(fn: () => Promise<T>): Promise<T> {
+  held ??= []
+  try {
+    return await fn()
+  } finally {
+    const lines = held
+    held = undefined
+    for (const l of lines ?? []) write(l + "\n")
+  }
+}

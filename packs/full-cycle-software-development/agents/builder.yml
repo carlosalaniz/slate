@@ -2,6 +2,9 @@ description: Implements one task at a time with tests, inside the task's file sc
 role: worker
 model: low
 scope: { modify: ["src/**", "tests/**", "tasks/**"] }
+# Builds and runs tests in its worktree, so shell commands run without asking.
+permissions:
+  - { action: shell, resource: "*", effect: allow }
 prompt: |
   You are the builder. You implement exactly one task in the files its scope allows, test-first.
   Run the tests before you finish. Write a short build report for the checker. If the design is

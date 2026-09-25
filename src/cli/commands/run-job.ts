@@ -11,6 +11,8 @@ import { ensureDir, writeText, removePath } from "../../util/fs.ts"
 import { shortId, slug } from "../../util/id.ts"
 import type { ProjectCtx } from "../context.ts"
 import { CliError, type Output } from "../output.ts"
+import { logLine } from "../prompt.ts"
+import { answerInline } from "../questions.ts"
 
 export interface RunOptions {
   dryRun: boolean
@@ -45,6 +47,8 @@ export async function createJob(p: ProjectCtx, opts: RunOptions): Promise<StateS
   await ensureDir(p.paths.answers)
   await ensureDir(p.paths.control)
   const state: JobState = newJobState({ id: shortId(slug(p.config.name)), name: p.config.name, opencode: p.config.opencode, runtime: opts.dryRun ? "fake" : "opencode", idea: opts.idea })
+  // Saved so `slate continue` and the background engine keep the autonomy chosen at start.
+  state.job.autonomy = opts.autoApprove ? "unattended" : "supervised"
   if (opts.discovered) {
     // Discovery already wrote the brief and the discovery documents with the user.
     state.job.pack = { name: opts.discovered.name, version: opts.discovered.version, dir: opts.discovered.dir }
@@ -60,7 +64,7 @@ export async function createJob(p: ProjectCtx, opts: RunOptions): Promise<StateS
 export async function buildEngine(p: ProjectCtx, store: StateStore, opts: RunOptions, out: Output): Promise<Engine> {
   const state = store.get()
   const log = (line: string) => {
-    if (!opts.quiet && !out.json) process.stdout.write(line + "\n")
+    if (!opts.quiet && !out.json) logLine(line)
   }
   const runtime = makeRuntime(p, state.job.runtime === "fake" || opts.dryRun, log)
   const audit = await AuditLog.open(p.paths.log, state.job.id)
@@ -81,7 +85,7 @@ export async function buildEngine(p: ProjectCtx, store: StateStore, opts: RunOpt
     audit,
     installedPacks: installed,
     pack,
-    autoApprove: opts.autoApprove || p.config.autonomy.auto_approve,
+    autoApprove: opts.autoApprove || state.job.autonomy === "unattended" || p.config.autonomy.auto_approve,
     log,
   })
 }
@@ -97,9 +101,12 @@ export async function runForeground(p: ProjectCtx, store: StateStore, opts: RunO
   }
   process.once("SIGINT", onSignal)
   process.once("SIGTERM", () => engine.requestStop(false))
+  // Attached in a terminal: questions are asked inline with a picker as they appear.
+  const stopAsking = process.stdin.isTTY && !out.json && !opts.quiet ? answerInline(p.paths) : undefined
   try {
     return await engine.run()
   } finally {
+    stopAsking?.()
     await removePath(p.paths.pid)
   }
 }

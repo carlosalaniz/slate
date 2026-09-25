@@ -4,11 +4,16 @@ import { register } from "../main.ts"
 import { parseArgs, str, bool, num } from "../args.ts"
 import { CliError, table, type Output } from "../output.ts"
 import { requireProject, requireJob, isEngineAlive } from "../context.ts"
-import { select, input, optionalNumber, line, spin, answered } from "../prompt.ts"
+import { select, input, optionalNumber, spin, answered, logLine } from "../prompt.ts"
+import { answerInline, pickAnswer, deliverAnswer, isValidAnswer } from "../questions.ts"
+import { activityLines, type ActivityFile } from "../../opencode/activity.ts"
 import { loadCatalog, defaultTiers, type CatalogModel } from "../../opencode/catalog.ts"
 import { runDiscovery, readDiscovery, writeDiscovery, checkDiscovery, type DiscoveryCheck } from "../discovery.ts"
 import { ProjectConfigSchema, saveProjectConfig, loadProjectConfig, type ProjectConfig } from "../../config/project.ts"
 import { projectPaths } from "../../config/paths.ts"
+import { ensureGitignore } from "../../config/gitignore.ts"
+import { loadInitDefaults, DEFAULTS_FILE } from "../../config/init-defaults.ts"
+import { readOpenCodeKeys } from "../../opencode/credentials.ts"
 import { StateStore } from "../../engine/state.ts"
 import { AuditLog } from "../../engine/audit.ts"
 import type { Question, JobState } from "../../engine/types.ts"
@@ -28,6 +33,7 @@ Sets up the project, writes slate.config.yml, then opens discovery in OpenCode (
 Runs non-interactively, without discovery, when --yes is set or there is no terminal.
 The pack is chosen with you during discovery; --pack limits discovery to that one.
 Budgets are optional: without --budget-job/--budget-task (or with 0) there is no cap.
+Answers in a .slate_defaults.yml (project dir, its parents, or home) are used without asking; see config.example.yml.
 Fails when a project is already initialized.`,
   async (argv, out) => {
     const { flags } = parseArgs(["init", ...argv])
@@ -38,43 +44,63 @@ Fails when a project is already initialized.`,
     const flag = (name: string) => str(flags, name)
     const numFlag = (name: string) => num(flags, name)
 
-    const name = flag("name") ?? (interactive ? await input("project name", { def: path.basename(root) }) : path.basename(root))
+    // Answers from .slate_defaults.yml are used without asking; flags still win.
+    const found = await loadInitDefaults(root).catch((e: Error) => {
+      throw new CliError(`invalid ${DEFAULTS_FILE}`, e.message)
+    })
+    const d = found?.values ?? {}
+    if (found && !out.json) out.line(`using defaults from ${found.file}`)
+    const preset = <T,>(label: string, value: T | undefined): T | undefined => {
+      if (value !== undefined && interactive) answered(label, value === 0 && label.startsWith("budget") ? "no cap" : String(value))
+      return value
+    }
 
-    const { provider, models, fromCatalog } = await chooseModels(interactive, { provider: flag("provider"), low: flag("low"), medium: flag("medium"), high: flag("high") })
+    const name = flag("name") ?? preset("project name", d.name) ?? (interactive ? await input("project name", { def: path.basename(root) }) : path.basename(root))
+
+    const given = { provider: flag("provider") ?? d.provider, low: flag("low") ?? d.models?.low, medium: flag("medium") ?? d.models?.medium, high: flag("high") ?? d.models?.high }
+    if (given.provider && given.low && given.medium && given.high && !flag("provider")) {
+      preset("provider", given.provider)
+      for (const t of ["low", "medium", "high"] as const) preset(`model for ${t} tier`, given[t])
+    }
+    const { provider, models, fromCatalog } = await chooseModels(interactive, given)
 
     // Budgets are optional: Enter (or no flag) means no cap.
-    const budgetJob = numFlag("budget-job") ?? (interactive ? await optionalNumber("budget per job (USD)") : undefined)
-    const budgetTask = numFlag("budget-task") ?? (interactive ? await optionalNumber("budget per task (USD)") : undefined)
+    const budgetJob = numFlag("budget-job") ?? preset("budget per job (USD)", d.budget?.job) ?? (interactive ? await optionalNumber("budget per job (USD)") : undefined)
+    const budgetTask = numFlag("budget-task") ?? preset("budget per task (USD)", d.budget?.per_task) ?? (interactive ? await optionalNumber("budget per task (USD)") : undefined)
 
     // No pack by default: it is chosen with the user during discovery. --pack limits the choice to one.
-    const pack = flag("pack")
+    const pack = flag("pack") ?? d.pack
 
     const config: ProjectConfig = ProjectConfigSchema.parse({
       name,
       provider,
       models,
-      budget: { job: budgetJob, per_task: budgetTask, per_model: {} },
+      budget: { job: budgetJob, per_task: budgetTask, per_model: d.budget?.per_model ?? {} },
       // Supervised or unattended is chosen per job at `slate start`; these apply to both.
       autonomy: {
-        question_timeout_hours: numFlag("question-timeout") ?? 8,
-        on_timeout: flag("on-timeout") ?? "keep-waiting",
+        question_timeout_hours: numFlag("question-timeout") ?? d.autonomy?.question_timeout_hours ?? 8,
+        on_timeout: flag("on-timeout") ?? d.autonomy?.on_timeout ?? "keep-waiting",
         auto_approve: false,
       },
       pack,
-      opencode: flag("opencode") ?? "2.0.15",
+      opencode: flag("opencode") ?? d.opencode ?? "2.0.15",
+      ...(d.runtime ? { runtime: d.runtime } : {}),
+      ...(d.config ? { config: d.config } : {}),
     })
     await ensureDir(paths.slate)
     await saveProjectConfig(root, config)
+    const gitignored = await ensureGitignore(root)
     let providerNote = ""
     if (!fromCatalog && !bool(flags, "skip-check") && !out.json) {
-      const key = process.env[`${config.provider.toUpperCase()}_API_KEY`]
+      // A key saved in OpenCode counts too: Slate reuses those (see opencode/credentials.ts).
+      const key = process.env[`${config.provider.toUpperCase()}_API_KEY`] || readOpenCodeKeys().keys.some((k) => k.providerID === config.provider)
       if (!key) providerNote = `note: ${config.provider.toUpperCase()}_API_KEY is not set in this shell; OpenCode needs credentials for '${config.provider}' before \`slate start\`.`
     }
     out.emit(
-      () => [`initialized ${config.name} in ${root}`, `  config: slate.config.yml`, `  pack:   ${config.pack ?? "(chosen with you during discovery)"}`, `  models: low=${config.models.low} medium=${config.models.medium} high=${config.models.high}`, ...(providerNote ? [providerNote] : [])],
+      () => [`initialized ${config.name} in ${root}`, `  config: slate.config.yml`, ...(gitignored ? ["  .gitignore: added Slate's runtime files"] : []), `  pack:   ${config.pack ?? "(chosen with you during discovery)"}`, `  models: low=${config.models.low} medium=${config.models.medium} high=${config.models.high}`, ...(providerNote ? [providerNote] : [])],
       { root, config, note: providerNote || undefined },
     )
-    if (!interactive || bool(flags, "no-discover")) {
+    if (!interactive || bool(flags, "no-discover") || d.discover === false) {
       out.line("next: `slate discover` to describe what to build, then `slate start`")
       return 0
     }
@@ -245,7 +271,8 @@ register(
   "continue",
   `slate continue [--yes] [--detach] [--quiet]
 Reattaches to the current job. If an engine process is running, streams its log and status until it finishes or you press Ctrl-C
-(the job keeps running). If the job is stopped, blocked or was interrupted, resumes it here from state.json.
+(the job keeps running). If the job is stopped, blocked or was interrupted, resumes it from state.json: here for a
+supervised job, in the background (and watched from here) for an unattended one. Questions are asked inline with a picker.
 Fails when no job exists.`,
   async (argv, out) => {
     const { flags } = parseArgs(["continue", ...argv])
@@ -259,7 +286,14 @@ Fails when no job exists.`,
       out.emit(() => [`job ${st.job.id} is already done`, ...summary(st)], { job: st.job, status: st.status })
       return 0
     }
-    const opts: RunOptions = { dryRun: st.job.runtime === "fake", autoApprove: bool(flags, "yes", "y"), quiet: bool(flags, "quiet", "q") }
+    const unattended = bool(flags, "yes", "y") || st.job.autonomy === "unattended"
+    const opts: RunOptions = { dryRun: st.job.runtime === "fake", autoApprove: unattended, quiet: bool(flags, "quiet", "q") }
+    if (unattended && !bool(flags, "detach") && process.stdin.isTTY && !out.json) {
+      // An unattended job keeps running in the background; this terminal only watches it.
+      const newPid = await runDetached(p, opts)
+      out.line(`resumed ${st.job.id} in the background (unattended, pid ${newPid})`)
+      return attach(p.paths, newPid, out)
+    }
     if (bool(flags, "detach")) {
       const newPid = await runDetached(p, opts)
       out.emit(() => [`resumed ${st.job.id} in the background (pid ${newPid})`], { job: st.job.id, pid: newPid })
@@ -276,23 +310,34 @@ async function attach(paths: ReturnType<typeof projectPaths>, pid: number, out: 
   out.line(`attached to engine pid ${pid}; Ctrl-C detaches (the job keeps running)`)
   let seen = (await AuditLog.read(paths.log)).length
   let detached = false
+  const stopAsking = process.stdin.isTTY && !out.json ? answerInline(paths) : undefined
   process.once("SIGINT", () => {
     detached = true
   })
   while (!detached) {
     const records = await AuditLog.read(paths.log)
-    for (const r of records.slice(seen)) out.line(formatAudit(r.at, r.event))
+    for (const r of records.slice(seen)) if (!out.json) logLine(formatAudit(r.at, r.event))
     seen = records.length
     const alive = await isEngineAlive(paths)
     if (!alive) {
+      stopAsking?.()
       const st = await StateStore.read(paths.state)
       if (st) out.emit(() => summary(st), { job: st.job, status: st.status, phase: st.phase })
       return 0
     }
     await sleep(1000)
   }
+  stopAsking?.()
   out.line("detached")
   return 0
+}
+
+async function readActivity(file: string): Promise<ActivityFile | undefined> {
+  try {
+    return JSON.parse(await readTextOr(file, "")) as ActivityFile
+  } catch {
+    return undefined
+  }
 }
 
 /* -------------------------------------------------------------------- status */
@@ -300,8 +345,10 @@ async function attach(paths: ReturnType<typeof projectPaths>, pid: number, out: 
 register(
   "status",
   `slate status [--json]
-Where the job is and what to do next, questions waiting on you (oldest first), what each branch is doing, tokens and
-spend per model, task and story, and steps that failed their output contract. Fails when there is no project.`,
+Where the job is and what to do next, questions waiting on you (oldest first), what each branch is doing, what each
+running agent is doing right now (consults and subagents indented under the agent that started them, with the
+\`slate log\` target for each), tokens and spend per model, task and story, and steps that failed their output
+contract. Fails when there is no project.`,
   async (_argv, out) => {
     const p = await requireProject()
     const st = await StateStore.read(p.paths.state)
@@ -328,6 +375,10 @@ spend per model, task and story, and steps that failed their output contract. Fa
     if (!branches.length) lines.push("  (none yet)")
     for (const b of branches) lines.push(`  ${b.id.padEnd(28)} ${b.status.padEnd(8)} ${b.current ? `at ${b.current}` : ""}${b.blockedOn ? ` waiting on ${b.blockedOn}` : ""}  (${ageOf(b.since)})`)
     if (running.length) lines.push(`running steps: ${running.map((r) => r.key).join(", ")}`)
+    // What each agent is doing right now; only meaningful while an engine is running.
+    const activity = pid ? await readActivity(p.paths.activity) : undefined
+    const agents = activity ? activityLines(activity, ageOf) : []
+    if (agents.length) lines.push("", "agents:", ...agents)
     lines.push("")
     lines.push(`spend: ${usd(st.spend.total)} of ${cap(p.config.budget.job)}   tokens in/out ${st.spend.tokens.input}/${st.spend.tokens.output}`)
     const byModel = Object.entries(st.spend.byModel).sort((a, b) => b[1] - a[1])
@@ -339,7 +390,7 @@ spend per model, task and story, and steps that failed their output contract. Fa
     lines.push("")
     lines.push(`contract failures: ${failures.length} (${failures.filter((f) => f.retried).length} re-prompted)`)
     for (const f of failures.slice(-8)) lines.push(`  ${f.key}: missing ${f.missing.join(", ") || "(bad verdict)"}${f.retried ? " -> re-prompted" : ""}`)
-    out.emit(() => lines, { job: st.job, phase: st.phase, status: st.status, reason: st.stopReason, enginePid: pid ?? null, questions: open, branches: st.branches, running: running.map((r) => r.key), spend: st.spend, budget: p.config.budget, contractFailures: failures })
+    out.emit(() => lines, { job: st.job, phase: st.phase, status: st.status, reason: st.stopReason, enginePid: pid ?? null, questions: open, branches: st.branches, running: running.map((r) => r.key), agents: activity ? Object.values(activity.sessions).filter((a) => !a.done) : [], spend: st.spend, budget: p.config.budget, contractFailures: failures })
     return 0
   },
 )
@@ -349,7 +400,7 @@ spend per model, task and story, and steps that failed their output contract. Fa
 register(
   "inbox",
   `slate inbox [--answer QID OPTION [--message TEXT]] [--json]
-Walks through open questions one at a time with the context re-shown, including reviewer notes from gates.
+Walks through open questions one at a time with the context re-shown, including reviewer notes from gates; pick an answer.
 Non-interactive: \`slate inbox --answer <qid> <option> [--message "..."]\`. Works without attaching. Fails when no job exists.`,
   async (argv, out) => {
     const { flags, positional } = parseArgs(["inbox", ...argv])
@@ -380,31 +431,16 @@ Non-interactive: \`slate inbox --answer <qid> <option> [--message "..."]\`. Work
     }
     for (const [i, q] of open.entries()) {
       out.line(`\n(${i + 1}/${open.length}) ${formatQuestion(q).join("\n")}`)
-      const answer = await line(`answer (${q.options.map((o) => o.id).join("/") || "text"}; Enter to skip, q to quit):`)
-      if (answer === "q") break
-      if (!answer) continue
-      const [option, ...rest] = answer.split(/\s+/)
-      const message = rest.join(" ") || undefined
-      if (!isValidAnswer(q, option!)) {
-        out.line(`  not one of ${q.options.map((o) => o.id).join(", ")}; skipped`)
-        continue
-      }
-      await deliverAnswer(p.paths, q, option!, message)
-      out.line(`  answered: ${option}`)
+      const picked = await pickAnswer(q, { quit: true })
+      if (picked === "quit") break
+      if (picked === "skip") continue
+      await deliverAnswer(p.paths, q, picked.answer, picked.message)
+      out.line(`  answered: ${picked.answer}`)
     }
     return 0
   },
 )
 
-/** Forms take any text; everything else must be one of its options (a note goes in --message). */
-function isValidAnswer(q: Question, option: string): boolean {
-  return q.kind === "form" || !q.options.length || q.options.some((o) => o.id === option)
-}
-
-async function deliverAnswer(paths: ReturnType<typeof projectPaths>, q: Question, answer: string, message?: string): Promise<void> {
-  await ensureDir(paths.answers)
-  await writeJsonAtomic(path.join(paths.answers, `${q.id}.json`), { answer, message, at: new Date().toISOString() })
-}
 
 function formatQuestion(q: Question): string[] {
   const lines = [`[${q.id}] ${q.kind} · ${ageOf(q.created)} ago · pauses ${q.branch}${q.step ? ` · step ${q.step}` : ""}`, `  ${q.prompt}`]

@@ -23,8 +23,11 @@ export interface SessionEntry {
 
 export class SessionRegistry {
   private entries = new Map<string, SessionEntry>()
+  /** Called for every session Slate starts (steps and consults); the adapter tracks activity with it. */
+  onSet?: (entry: SessionEntry) => void
   set(entry: SessionEntry): void {
     this.entries.set(entry.sessionID, entry)
+    this.onSet?.(entry)
   }
   get(sessionID: string): SessionEntry | undefined {
     return this.entries.get(sessionID)

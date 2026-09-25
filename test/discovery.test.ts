@@ -3,8 +3,10 @@ import path from "node:path"
 import { mkdir, writeFile } from "node:fs/promises"
 import { projectPaths } from "../src/config/paths.ts"
 import { findPack } from "../src/pack/registry.ts"
-import { checkDiscovery, discoveryDocs } from "../src/cli/discovery.ts"
-import { createJob, runForeground } from "../src/cli/commands/run-job.ts"
+import YAML from "yaml"
+import { checkDiscovery, discoveryDocs, writeAgents, scaffoldChosenPack } from "../src/cli/discovery.ts"
+import { loadCorePack } from "../src/engine/core-pack.ts"
+import { createJob, runForeground, buildEngine } from "../src/cli/commands/run-job.ts"
 import { Output } from "../src/cli/output.ts"
 import { tmpProject, testConfig } from "./helpers.ts"
 
@@ -59,4 +61,58 @@ describe("discovery", () => {
     // the specs written with the user are left alone
     expect(await Bun.file(path.join(root, "specs/tech-spec.md")).text()).toBe("written with the user\n")
   }, 120_000)
+})
+
+describe("discovery agents and placeholders", () => {
+  const frontOf = async (file: string) => {
+    const text = await Bun.file(file).text()
+    return { data: YAML.parse(/^---\n([\s\S]*?)\n---/.exec(text)![1]!), body: text.replace(/^---\n[\s\S]*?\n---\n/, "") }
+  }
+
+  test("writes the lead (brief only, asks with the question tool) and one subagent per drafting agent", async () => {
+    const root = await tmpProject()
+    const paths = projectPaths(root)
+    const config = testConfig({ provider: "openrouter", models: { low: "a/low", medium: "a/mid", high: "a/high" } })
+    const byPack = await writeAgents(paths, config, await loadCorePack())
+    const docs = byPack.get("full-cycle-software-development")!.docs
+    expect(docs.map((d) => [d.file, d.subagent])).toEqual([["specs/product-scope.md", "slate-analyst"], ["specs/uiux-spec.md", "slate-uiux-designer"], ["specs/tech-spec.md", "slate-architect"]])
+
+    const lead = await frontOf(path.join(root, ".opencode/agents/slate-discovery.md"))
+    expect(lead.data).toMatchObject({ mode: "primary", model: "openrouter/a/high" })
+    expect(lead.data.permissions).toContainEqual({ action: "question", resource: "*", effect: "allow" })
+    expect(lead.data.permissions).toContainEqual({ action: "edit", resource: ".slate/brief.md", effect: "allow" })
+    expect(lead.body).toContain("`slate-analyst`")
+    expect(lead.body).toContain("`question` tool")
+
+    const analyst = await frontOf(path.join(root, ".opencode/agents/slate-analyst.md"))
+    expect(analyst.data.mode).toBe("subagent")
+    expect(analyst.data.permissions).toContainEqual({ action: "question", resource: "*", effect: "deny" })
+    expect(analyst.data.permissions).toContainEqual({ action: "edit", resource: "specs/**", effect: "allow" })
+    expect(analyst.body).toContain("product analyst")
+  })
+
+  test("naming the pack in the brief creates placeholders, which still count as missing", async () => {
+    const root = await tmpProject()
+    const paths = projectPaths(root)
+    const core = await loadCorePack()
+    const byPack = await writeAgents(paths, testConfig(), core)
+    expect(await scaffoldChosenPack(paths, byPack, core)).toBe(false)
+    await write(root, { ".slate/brief.md": brief("full-cycle-software-development"), "specs/tech-spec.md": "already written\n" })
+    expect(await scaffoldChosenPack(paths, byPack, core)).toBe(true)
+    expect(await Bun.file(path.join(root, "specs/product-scope.md")).text()).toContain("slate-analyst")
+    expect(await Bun.file(path.join(root, "specs/tech-spec.md")).text()).toBe("already written\n")
+    expect(await checkDiscovery(paths)).toMatchObject({ done: false, missing: SPECS.slice(0, 2) })
+  })
+})
+
+describe("autonomy", () => {
+  test("the choice made at start is saved with the job, so a resumed job keeps it", async () => {
+    const root = await tmpProject()
+    const p = { root, paths: projectPaths(root), config: testConfig() }
+    const store = await createJob(p, { dryRun: true, autoApprove: true, quiet: true, idea: "x" })
+    expect(store.get().job.autonomy).toBe("unattended")
+    // `slate continue` passes no --yes; the saved autonomy still auto-approves.
+    const engine = await buildEngine(p, store, { dryRun: true, autoApprove: false, quiet: true }, new Output(true))
+    expect(engine.o.autoApprove).toBe(true)
+  })
 })

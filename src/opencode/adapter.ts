@@ -17,6 +17,7 @@ import { ensureDir, copyDir, removePath, isDir } from "../util/fs.ts"
 import { SessionRegistry } from "./registry.ts"
 import { createSlatePlugin, lastAssistantText } from "./plugin.ts"
 import { shareOpenCodeKeys } from "./credentials.ts"
+import { ActivityTracker } from "./activity.ts"
 
 /**
  * The one module that talks to `@opencode/sdk`. Everything OpenCode-specific (call shapes, event
@@ -51,6 +52,7 @@ export class OpenCodeRuntime implements Runtime {
   private oc: any
   private job!: JobContext
   private readonly registry = new SessionRegistry()
+  private activity?: ActivityTracker
   private eventAbort = new AbortController()
   private usage = new Map<string, { cost: number; tokens: TokenUsage }>()
   private sdkVersion = "unknown"
@@ -78,6 +80,9 @@ export class OpenCodeRuntime implements Runtime {
     } catch {
       this.sdkVersion = "2.x"
     }
+    const activity = new ActivityTracker(job.activityPath, job.root)
+    this.activity = activity
+    this.registry.onSet = (e) => activity.register({ sessionID: e.sessionID, key: e.key, agent: e.agent.id, parent: e.parent, log: e.vars.task ?? e.vars.story ?? e.stepId })
     const plugin = createSlatePlugin({ job, registry: this.registry, tier: (t) => job.tier(t), log: (l) => this.log(l) })
     this.oc = await sdk.OpenCode.create({
       database: { path: job.dbPath },
@@ -138,6 +143,7 @@ export class OpenCodeRuntime implements Runtime {
   }
 
   private handleEvent(ev: any): void {
+    this.activity?.handle(ev)
     const sessionID: string | undefined = ev?.data?.sessionID ?? ev?.data?.form?.sessionID
     if (!sessionID) return
     const entry = this.registry.get(sessionID)
@@ -261,6 +267,7 @@ export class OpenCodeRuntime implements Runtime {
   }
 
   private async collect(sessionID: string, model: ModelRef, outcome: RunStepResult["outcome"], children?: string[]): Promise<RunStepResult> {
+    this.activity?.end(sessionID)
     const info = await this.oc.sessions.get({ sessionID })
     const entry = this.registry.get(sessionID)
     let cost = Number(info.cost ?? 0)

@@ -39,6 +39,8 @@ export interface JobContext {
   /** Consult transcripts are written here: consults/{step}/{n}.md */
   consultsDir: string
   dbPath: string
+  /** Live agent activity for `slate status` is written here. */
+  activityPath: string
   /** The bundled slate-core pack: Slate's own agents, skills and prompt templates. */
   core: CorePack
 }
@@ -298,6 +300,8 @@ export interface JobState {
     opencode: string
     runtime: "opencode" | "fake"
     idea?: string
+    /** Chosen at `slate start`; unattended answers every question that has a default. */
+    autonomy?: "supervised" | "unattended"
   }
   phase: Phase
   status: JobStatus
