@@ -19,6 +19,34 @@ const HIDE_CURSOR = "\x1b[?25l"
 const SHOW_CURSOR = "\x1b[?25h"
 const write = (s: string) => process.stdout.write(s)
 
+/*
+ * Redrawing in place moves the cursor up by the rows drawn last time, so lines that wrap in a
+ * narrow terminal must be counted as the rows they take, or cut to fit.
+ */
+const ANSI = /\x1b\[[0-9;]*m/g
+const width = () => Math.max(20, process.stdout.columns || 80)
+const visibleLength = (s: string) => [...s.replace(ANSI, "")].length
+/** Terminal rows a line takes once it wraps. */
+const rowsOf = (line: string) => Math.max(1, Math.ceil(visibleLength(line) / width()))
+/** Cuts a (possibly colored) line to `max` visible characters, ending in "…". */
+function fit(line: string, max = width() - 1): string {
+  if (visibleLength(line) <= max) return line
+  let out = ""
+  let n = 0
+  for (const part of line.split(/(\x1b\[[0-9;]*m)/)) {
+    if (part.startsWith("\x1b[")) {
+      out += part
+      continue
+    }
+    for (const ch of part) {
+      if (n >= max - 1) return out + "…\x1b[0m"
+      out += ch
+      n++
+    }
+  }
+  return out
+}
+
 /** Feeds raw key chunks to `onKey` until it returns a value; restores the terminal either way. */
 function withRawKeys<T>(onKey: (key: string) => { done: T } | undefined): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -88,13 +116,13 @@ export async function select<T extends string>(message: string, choices: readonl
       ...shown.slice(top, top + pageSize).map((c, k) => {
         const n = top + k
         const text = `${filterable ? "" : `${n + 1}. `}${c.label ?? c.value}${c.hint ? dim(`  ${c.hint}`) : ""}`
-        return n === i ? cyan(`❯ ${text}`) : `  ${text}`
+        return fit(n === i ? cyan(`❯ ${text}`) : `  ${text}`)
       }),
       ...(shown.length ? [] : [dim("  no matches")]),
       ...(shown.length > pageSize ? [dim(`  ${top + 1}–${Math.min(top + pageSize, shown.length)} of ${shown.length}`)] : []),
     ]
     write((drawn ? `\x1b[${drawn}A\r\x1b[0J` : HIDE_CURSOR) + lines.join("\n") + "\n")
-    drawn = lines.length
+    drawn = lines.reduce((sum, l) => sum + rowsOf(l), 0)
   }
   render()
   const picked = await withRawKeys<T>((key) => {
@@ -134,12 +162,17 @@ export async function input(message: string, opts: { def?: string; placeholder?:
   let error = ""
   let drawn = false
   const render = () => {
-    const hint = opts.def ?? opts.placeholder ?? ""
-    const shown = value || (hint ? dim(hint) : "")
-    const line = `${cyan("?")} ${bold(message)} ${shown}${error ? `  ${paint("31")(error)}` : ""}`
+    // One row only: a long answer scrolls sideways so the end being typed stays visible.
+    const prefix = `${cyan("?")} ${bold(message)} `
+    const err = error ? `  ${paint("31")(error)}` : ""
+    const room = Math.max(8, width() - 1 - visibleLength(prefix) - visibleLength(err))
+    const chars = [...value]
+    const typed = chars.length > room ? "…" + chars.slice(-(room - 1)).join("") : value
+    const hint = [...(value ? "" : opts.def ?? opts.placeholder ?? "")].slice(0, room).join("")
+    const line = `${prefix}${typed || (hint ? dim(hint) : "")}${err}`
     write(`${drawn ? "\r\x1b[0J" : ""}${line}`)
     // Park the cursor right after the typed text, not after the dimmed default or error.
-    const tail = (value ? "" : hint).length + (error ? error.length + 2 : 0)
+    const tail = [...hint].length + (error ? visibleLength(err) : 0)
     if (tail) write(`\x1b[${tail}D`)
     drawn = true
   }

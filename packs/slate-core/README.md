@@ -21,6 +21,8 @@ talks to agents; no TypeScript change is needed.
 | `consult-tool.md` | the `consult` tool is registered (frontmatter holds argument descriptions) | (none) |
 | `gate-review.md` | a gate asks a reviewer | reviewer_prompt, action, resources, inputs |
 | `pack-proposal.md` | intake picks a pack (dry runs without discovery) | packs, brief |
-| `discovery-agent.md` | `slate discover` writes `.opencode/agents/slate-discovery.md` (frontmatter + system prompt) | project, model, brief_path, packs |
+| `discovery-agent.md` | `slate discover` writes the lead to `.opencode/agents/slate-discovery.md` (system prompt; Slate adds the frontmatter) | project, brief_path, packs, pack_options |
+| `discovery-subagent.md` | the same, for each pack agent that drafts a discovery document | agent_prompt, project |
+| `discovery-stub.md` | placeholder for a discovery document once the pack is chosen | marker, file, agent, instructions |
 | `discovery-start.md` | the first message of a discovery conversation | project |
 | `decision.md` | a loop with `ask-decision-agent` runs out of rounds | loop, max, last_failure, context |

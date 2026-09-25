@@ -83,6 +83,8 @@ describe("discovery agents and placeholders", () => {
     expect(lead.data.permissions).toContainEqual({ action: "edit", resource: ".slate/brief.md", effect: "allow" })
     expect(lead.body).toContain("`slate-analyst`")
     expect(lead.body).toContain("`question` tool")
+    // The pack question can only offer installed packs, with their own fits line.
+    expect(lead.body).toContain("- label: full-cycle-software-development\n  description: Building or extending a software product")
 
     const analyst = await frontOf(path.join(root, ".opencode/agents/slate-analyst.md"))
     expect(analyst.data.mode).toBe("subagent")

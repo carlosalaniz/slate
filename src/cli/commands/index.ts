@@ -1,4 +1,5 @@
 import path from "node:path"
+import os from "node:os"
 import YAML from "yaml"
 import { register } from "../main.ts"
 import { parseArgs, str, bool, num } from "../args.ts"
@@ -106,6 +107,47 @@ Fails when a project is already initialized.`,
     }
     out.line("")
     return reportDiscovery(await runDiscovery(paths, config), out)
+  },
+)
+
+/* ------------------------------------------------------------------ defaults */
+
+register(
+  "defaults",
+  `slate defaults [--here] [--show]
+Writes a .slate_defaults.yml with answers \`slate init\` then uses without asking: provider and models (from what your
+OpenCode has connected), budgets, and whether init opens discovery. Saved in your home directory, or in the current
+directory with --here (it then applies to projects under it). --show prints the file init would use from here.`,
+  async (argv, out) => {
+    const { flags } = parseArgs(["defaults", ...argv])
+    const cwd = process.cwd()
+    if (bool(flags, "show")) {
+      const found = await loadInitDefaults(cwd).catch((e: Error) => {
+        throw new CliError(`invalid ${DEFAULTS_FILE}`, e.message)
+      })
+      if (!found) out.emit(() => [`no ${DEFAULTS_FILE} applies here`, "  run `slate defaults` to create one"], { file: null })
+      else out.emit(() => [found.file, "", YAML.stringify(found.values).trimEnd()], { file: found.file, values: found.values })
+      return 0
+    }
+    if (!process.stdin.isTTY || out.json) throw new CliError("slate defaults asks questions and needs a terminal", `or write ${DEFAULTS_FILE} by hand; see config.example.yml`)
+    const file = path.join(bool(flags, "here") ? cwd : os.homedir(), DEFAULTS_FILE)
+    if (await isFile(file)) {
+      out.line(`${file} exists:\n${(await readTextOr(file, "")).trimEnd()}\n`)
+      if ((await select("replace it?", [{ value: "yes" }, { value: "no" }], "yes")) === "no") return 0
+    }
+    const { provider, models } = await chooseModels(true, {})
+    const job = await optionalNumber("budget per job (USD)")
+    const perTask = await optionalNumber("budget per task (USD)")
+    const discover = (await select("open discovery right after slate init?", [{ value: "yes" }, { value: "no", hint: "run slate discover when you are ready" }], "yes")) === "yes"
+    const values = {
+      provider,
+      models,
+      ...(job || perTask ? { budget: { ...(job ? { job } : {}), ...(perTask ? { per_task: perTask } : {}) } } : {}),
+      ...(discover ? {} : { discover: false }),
+    }
+    await writeText(file, `# Answers \`slate init\` uses without asking. Written by \`slate defaults\`; edit freely.\n# Keys: see the end of config.example.yml. Flags passed to init still win.\n${YAML.stringify(values)}`)
+    out.emit(() => [`wrote ${file}`, "next: `slate init` in a new project asks only for its name"], { file, values })
+    return 0
   },
 )
 

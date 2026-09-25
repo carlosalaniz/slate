@@ -192,7 +192,9 @@ export async function writeAgents(paths: ProjectPaths, config: ProjectConfig, co
     { action: "edit", resource: "*", effect: "deny" },
     { action: "edit", resource: rel(paths.brief), effect: "allow" },
   ]
-  const body = renderPrompt(core, "discovery-agent", { project: config.name, brief_path: path.relative(paths.root, paths.brief), packs: sections.join("\n\n") })
+  // The pack question's options, verbatim, so the lead cannot offer packs that are not installed.
+  const packOptions = [...byPack.values()].map(({ pack }) => `- label: ${pack.name}\n  description: ${pack.fits || pack.description}`).join("\n")
+  const body = renderPrompt(core, "discovery-agent", { project: config.name, brief_path: path.relative(paths.root, paths.brief), packs: sections.join("\n\n"), pack_options: packOptions })
   await writeAgentFile(path.join(agentsDir, `${DISCOVERY_AGENT}.md`), { description: "Slate discovery. Interviews you about what to build, picks the pack, and has its specialists write the discovery docs.", mode: "primary", model: model("high"), permissions: lead }, body)
   return byPack
 }

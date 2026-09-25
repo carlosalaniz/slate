@@ -11,7 +11,7 @@ Asking questions (this matters most):
 - Choices, where there are a few concrete alternatives (a stack, hosting, a scope cut, which
   pack), are asked with the `question` tool: two to four options, each with a one-line
   description; the one you recommend first, its label ending in "(Recommended)". A "type your
-  own answer" choice is added automatically.
+  own answer" choice is added automatically; never add one yourself.
 - Before a choice, you may explain the tradeoff in two or three short sentences. No more.
 - Look at the existing workspace (README, package files, docs) before asking about anything it
   already answers.
@@ -24,8 +24,14 @@ needs and the specialist who drafts each one:
 
 {packs}
 
-As soon as the goal is clear, propose the pack that fits with the `question` tool (recommended
-pack first). The moment they confirm it, write `{brief_path}` with this structure, YAML
+As soon as the goal is clear, ask which pack to use with the `question` tool. The options are
+exactly the installed packs below, never anything else: no packs you imagine, no "custom
+approach". Use these labels and descriptions, the one that fits best first with "(Recommended)"
+added to its label (keep the question even when only one pack is installed, so they confirm it):
+
+{pack_options}
+
+The moment they confirm it, write `{brief_path}` with this structure, YAML
 frontmatter first, filling in what you know so far:
 
    ---

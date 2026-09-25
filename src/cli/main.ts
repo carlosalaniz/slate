@@ -13,6 +13,7 @@ const HELP = `slate — workflow runner for long, unattended agent jobs (OpenCod
 usage: slate <command> [options]   (every command accepts --json)
 
   init       Set up the project (name, provider and models from your OpenCode, budget), then open discovery.
+  defaults   Save answers \`slate init\` reuses (provider, models, budgets) to ~/.slate_defaults.yml.
   discover   Discovery in OpenCode, with you: writes the brief, picks the pack, writes the pack's discovery docs.
   start      Start a job from a finished discovery: plan, build, close. Asks supervised or unattended.
   continue   Reattach to the current job to watch or give input. Resumes it if stopped.
