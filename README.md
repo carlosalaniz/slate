@@ -21,9 +21,9 @@ Every option is documented in [`config.example.yml`](./config.example.yml) — c
 
 ```
 cd my-project
-bun run /path/to/slate/bin/slate.ts init --yes --name my-app
-export ANTHROPIC_API_KEY=...          # or whatever provider you chose in slate.config.yml
-slate start --idea "An offline todo web app with local storage"
+slate init                            # config, then discovery opens in OpenCode: talk it through, then quit
+slate discover                        # reopen discovery if you quit before it was done
+slate start                           # plan and build; asks supervised (here) or unattended (background)
 slate status                          # where the job is, what it needs from you, what it cost
 slate inbox                           # answer open questions one at a time
 slate log s1-t1                       # why a task looks the way it does
@@ -31,8 +31,12 @@ slate stop                            # checkpoint after the current step
 slate continue                        # resume (this is also how you retry) or attach
 ```
 
-`slate start --dry-run --yes` runs the entire loop with a fake runtime that writes the contract files
-and makes no model calls. It is the fastest way to see what a pack does.
+Discovery always happens with you present: it runs in your own OpenCode (install it and connect a
+provider first), which also supplies the providers and models `slate init` offers. Only plan, build
+and close can run unattended.
+
+`slate start --dry-run --yes --idea "..."` runs the entire loop with a fake runtime that writes the
+contract files and makes no model calls. It is the fastest way to see what a pack does.
 
 ## Layout
 

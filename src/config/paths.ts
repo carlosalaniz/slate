@@ -11,6 +11,7 @@ export function projectPaths(root: string) {
     state: path.join(slate, "state.json"),
     log: path.join(slate, "log.jsonl"),
     brief: path.join(slate, "brief.md"),
+    discovery: path.join(slate, "discovery.json"),
     engineLog: path.join(slate, "engine.log"),
     pid: path.join(slate, "engine.pid"),
     control: path.join(slate, "control"),

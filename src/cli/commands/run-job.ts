@@ -5,7 +5,7 @@ import { AuditLog } from "../../engine/audit.ts"
 import { newJobState, type JobState, type Runtime } from "../../engine/types.ts"
 import { FakeRuntime } from "../../opencode/fake.ts"
 import { OpenCodeRuntime } from "../../opencode/adapter.ts"
-import { listInstalledPacks, findPack } from "../../pack/registry.ts"
+import { listInstalledPacks, findPack, type InstalledPack } from "../../pack/registry.ts"
 import { loadPack } from "../../pack/loader.ts"
 import { ensureDir, writeText, removePath } from "../../util/fs.ts"
 import { shortId, slug } from "../../util/id.ts"
@@ -19,6 +19,8 @@ export interface RunOptions {
   packRef?: string
   idea?: string
   briefPath?: string
+  /** Pack chosen in a finished discovery: the job starts at the plan phase with it pinned. */
+  discovered?: InstalledPack
 }
 
 export function makeRuntime(p: ProjectCtx, dryRun: boolean, log: (l: string) => void): Runtime {
@@ -35,13 +37,19 @@ export async function createJob(p: ProjectCtx, opts: RunOptions): Promise<StateS
   if (existing) {
     // Archive the finished job's state next to the log so history survives.
     await writeText(path.join(p.paths.slate, `state.${existing.job.id}.json`), JSON.stringify(existing, null, 2))
-    await removePath(p.paths.brief)
+    // A finished discovery's brief belongs to this new job; otherwise it is the old job's.
+    if (!opts.discovered) await removePath(p.paths.brief)
     await removePath(p.paths.answers)
   }
   await ensureDir(p.paths.slate)
   await ensureDir(p.paths.answers)
   await ensureDir(p.paths.control)
   const state: JobState = newJobState({ id: shortId(slug(p.config.name)), name: p.config.name, opencode: p.config.opencode, runtime: opts.dryRun ? "fake" : "opencode", idea: opts.idea })
+  if (opts.discovered) {
+    // Discovery already wrote the brief and the discovery documents with the user.
+    state.job.pack = { name: opts.discovered.name, version: opts.discovered.version, dir: opts.discovered.dir }
+    state.phase = "plan"
+  }
   if (opts.briefPath) {
     const text = await Bun.file(opts.briefPath).text()
     await writeText(p.paths.brief, text)

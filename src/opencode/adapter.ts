@@ -16,6 +16,7 @@ import { EMPTY_TOKENS } from "../engine/types.ts"
 import { ensureDir, copyDir, removePath, isDir } from "../util/fs.ts"
 import { SessionRegistry } from "./registry.ts"
 import { createSlatePlugin, lastAssistantText } from "./plugin.ts"
+import { shareOpenCodeKeys } from "./credentials.ts"
 
 /**
  * The one module that talks to `@opencode/sdk`. Everything OpenCode-specific (call shapes, event
@@ -33,6 +34,16 @@ export interface OpenCodeRuntimeOptions {
   log?: (line: string) => void
   logLevel?: "trace" | "debug" | "info" | "warn" | "error"
   worktreeStrategy?: "git" | "copy" | "none"
+}
+
+/** A review is a single answer; this only guards against a hung provider. */
+const REVIEW_TIMEOUT_MS = 10 * 60_000
+
+/** ": <message>" from the last assistant message's error, or "". */
+async function lastError(oc: any, sessionID: string): Promise<string> {
+  const messages: any[] = await oc.session.context({ sessionID }).catch(() => [])
+  const error = [...messages].reverse().find((m) => m?.type === "assistant" && m.error)?.error
+  return error?.message ? `: ${error.message}` : ""
 }
 
 export class OpenCodeRuntime implements Runtime {
@@ -80,6 +91,12 @@ export class OpenCodeRuntime implements Runtime {
     })
     void this.pumpEvents()
     await this.warm(job.root)
+    // After warm-up: listing providers needs the location initialized.
+    const shared = await shareOpenCodeKeys(this.oc, job.root).catch((e: Error) => {
+      this.log(`[opencode] could not reuse OpenCode's saved keys: ${e.message}`)
+      return []
+    })
+    if (shared.length) this.log(`[opencode] using keys saved in OpenCode for: ${shared.join(", ")}`)
   }
 
   /**
@@ -275,10 +292,29 @@ export class OpenCodeRuntime implements Runtime {
     }
   }
 
+  /**
+   * One-shot text answer (gate reviews, pack proposal, stuck-loop decisions). Runs as a throwaway
+   * session with every tool denied: `generate.text` has no location, so it cannot see providers
+   * that are only available in a location (OpenRouter and other env-key providers).
+   */
   async review(req: ReviewRequest): Promise<string> {
     const prompt = [req.reviewer.prompt, "", req.prompt, "", ...req.inputs.flatMap((i) => [`=== ${i.path} ===`, i.content.slice(0, 12000)])].join("\n")
-    const out = await this.oc.generate.text({ prompt, model: req.model })
-    return out?.text ?? ""
+    await this.warm(this.job.root)
+    const session = await this.oc.sessions.create({
+      location: { directory: this.job.root },
+      model: req.model,
+      title: `slate review: ${req.reviewer.id}`,
+      metadata: { slateJob: this.job.jobId, slateReview: req.reviewer.id },
+      permissions: [{ action: "*", resource: "*", effect: "deny" }],
+    })
+    try {
+      await this.oc.sessions.prompt({ sessionID: session.id, text: prompt })
+      const outcome = await this.waitFor(session.id, REVIEW_TIMEOUT_MS)
+      if (outcome !== "succeeded") throw new Error(`review by ${req.reviewer.id} ${outcome}${await lastError(this.oc, session.id)}`)
+      return await lastAssistantText(this.oc, session.id)
+    } finally {
+      await this.oc.sessions.remove({ sessionID: session.id }).catch(() => undefined)
+    }
   }
 
   async reply(reply: QuestionReply): Promise<void> {

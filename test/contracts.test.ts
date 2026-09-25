@@ -46,7 +46,7 @@ describe("contracts", () => {
 describe("slate-core prompts", () => {
   test("every text Slate sends a model is a template in packs/slate-core/prompts", async () => {
     const core = await loadCorePack()
-    expect(Object.keys(core.prompts).sort()).toEqual(["consult", "consult-tool", "consult-verdict", "decision", "gate-review", "pack-proposal", "plan-revision", "reprompt", "step"])
+    expect(Object.keys(core.prompts).sort()).toEqual(["consult", "consult-tool", "consult-verdict", "decision", "discovery-agent", "discovery-start", "gate-review", "pack-proposal", "plan-revision", "reprompt", "step"])
     expect(Object.keys(core.agents).sort()).toEqual(["slate-decision", "slate-intake", "slate-pack-proposer"])
     expect(Object.keys(core.skills)).toEqual(["slate-write-brief"])
     expect(Object.keys(core.messages).sort()).toEqual(["consult-from-consultant", "consult-limit", "consult-not-allowed", "consult-result", "consult-unavailable", "consult-unknown-agent", "consult-wrong-agent", "gate-ask", "gate-escalated", "gate-input-missing", "gate-rejected"])

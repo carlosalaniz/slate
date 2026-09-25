@@ -19,8 +19,8 @@ models:
   medium: claude-sonnet-5             # default: most skill steps
   high: claude-opus-5-5               # expensive: design, tricky work
 
-# Cost caps in USD. 0 means no cap. Hitting a cap stops the job at the next step
-# boundary; raise the cap here, then `slate continue`.
+# Cost caps in USD, all optional: leave one out (or set 0) for no cap. Hitting a cap
+# stops the job at the next step boundary; raise the cap here, then `slate continue`.
 budget:
   job: 200            # whole job
   per_task: 5         # per task

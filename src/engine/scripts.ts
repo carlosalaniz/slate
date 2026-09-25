@@ -1,6 +1,7 @@
 import path from "node:path"
 import type { ScriptSpec } from "../pack/schema.ts"
 import { resolveRuntime } from "./vars.ts"
+import { exportedKeyNames } from "../opencode/credentials.ts"
 
 export interface ScriptRun {
   ok: boolean
@@ -35,6 +36,8 @@ export async function runScript(input: {
     PATH: [path.dirname(process.execPath), process.env.PATH].filter(Boolean).join(path.delimiter),
     ...input.extraEnv,
   }
+  // Keys Slate borrowed from the user's OpenCode are for its own host, not for pack scripts.
+  for (const name of exportedKeyNames()) delete env[name]
   for (const [k, v] of Object.entries(input.vars)) env[`SLATE_VAR_${k.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`] = v
   const cmd = resolveRuntime(input.script.run, input.vars)
   const args = input.args.map((a) => resolveRuntime(a, input.vars))

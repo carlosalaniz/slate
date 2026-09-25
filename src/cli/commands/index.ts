@@ -4,6 +4,9 @@ import { register } from "../main.ts"
 import { parseArgs, str, bool, num } from "../args.ts"
 import { CliError, table, type Output } from "../output.ts"
 import { requireProject, requireJob, isEngineAlive } from "../context.ts"
+import { select, input, optionalNumber, line, spin, answered } from "../prompt.ts"
+import { loadCatalog, defaultTiers, type CatalogModel } from "../../opencode/catalog.ts"
+import { runDiscovery, readDiscovery, writeDiscovery, checkDiscovery, type DiscoveryCheck } from "../discovery.ts"
 import { ProjectConfigSchema, saveProjectConfig, loadProjectConfig, type ProjectConfig } from "../../config/project.ts"
 import { projectPaths } from "../../config/paths.ts"
 import { StateStore } from "../../engine/state.ts"
@@ -19,9 +22,12 @@ import { createJob, runForeground, runDetached, makeRuntime, type RunOptions } f
 register(
   "init",
   `slate init [--name X] [--provider anthropic] [--low M] [--medium M] [--high M] [--budget-job USD] [--budget-task USD]
-           [--autonomy supervised|unattended] [--question-timeout HOURS] [--on-timeout keep-waiting|take-default|escalate]
-           [--pack name[@version]] [--opencode VERSION] [--yes]
-Sets up the project and writes slate.config.yml. Runs non-interactively when flags are given or --yes is set.
+           [--question-timeout HOURS] [--on-timeout keep-waiting|take-default|escalate]
+           [--pack name[@version]] [--opencode VERSION] [--yes] [--no-discover]
+Sets up the project, writes slate.config.yml, then opens discovery in OpenCode (see \`slate discover\`).
+Runs non-interactively, without discovery, when --yes is set or there is no terminal.
+The pack is chosen with you during discovery; --pack limits discovery to that one.
+Budgets are optional: without --budget-job/--budget-task (or with 0) there is no cap.
 Fails when a project is already initialized.`,
   async (argv, out) => {
     const { flags } = parseArgs(["init", ...argv])
@@ -29,94 +35,192 @@ Fails when a project is already initialized.`,
     const paths = projectPaths(root)
     if (await loadProjectConfig(root)) throw new CliError("project already initialized (slate.config.yml exists)", "edit slate.config.yml directly, or delete it to re-run init. See `slate init --help`.")
     const interactive = !bool(flags, "yes", "y") && process.stdin.isTTY && !out.json
-    const ask = async (label: string, def: string): Promise<string> => {
-      if (!interactive) return def
-      process.stdout.write(`${label} [${def}]: `)
-      const line = await readLine()
-      return line.trim() || def
-    }
-    const autonomy = str(flags, "autonomy") ?? (await ask("autonomy (supervised|unattended)", "supervised"))
-    const packs = await listInstalledPacks(root)
-    const defaultPack = packs.find((p) => p.version !== "invalid")
+    const flag = (name: string) => str(flags, name)
+    const numFlag = (name: string) => num(flags, name)
+
+    const name = flag("name") ?? (interactive ? await input("project name", { def: path.basename(root) }) : path.basename(root))
+
+    const { provider, models, fromCatalog } = await chooseModels(interactive, { provider: flag("provider"), low: flag("low"), medium: flag("medium"), high: flag("high") })
+
+    // Budgets are optional: Enter (or no flag) means no cap.
+    const budgetJob = numFlag("budget-job") ?? (interactive ? await optionalNumber("budget per job (USD)") : undefined)
+    const budgetTask = numFlag("budget-task") ?? (interactive ? await optionalNumber("budget per task (USD)") : undefined)
+
+    // No pack by default: it is chosen with the user during discovery. --pack limits the choice to one.
+    const pack = flag("pack")
+
     const config: ProjectConfig = ProjectConfigSchema.parse({
-      name: str(flags, "name") ?? (await ask("project name", path.basename(root))),
-      provider: str(flags, "provider") ?? (await ask("provider", "anthropic")),
-      models: {
-        low: str(flags, "low") ?? (await ask("model for tier low", "claude-haiku-4-5-20251001")),
-        medium: str(flags, "medium") ?? (await ask("model for tier medium", "claude-sonnet-5")),
-        high: str(flags, "high") ?? (await ask("model for tier high", "claude-opus-5-5")),
-      },
-      budget: {
-        job: num(flags, "budget-job") ?? Number(await ask("budget per job (USD)", "200")),
-        per_task: num(flags, "budget-task") ?? Number(await ask("budget per task (USD)", "5")),
-        per_model: {},
-      },
+      name,
+      provider,
+      models,
+      budget: { job: budgetJob, per_task: budgetTask, per_model: {} },
+      // Supervised or unattended is chosen per job at `slate start`; these apply to both.
       autonomy: {
-        question_timeout_hours: num(flags, "question-timeout") ?? (autonomy === "unattended" ? 1 : 8),
-        on_timeout: str(flags, "on-timeout") ?? (autonomy === "unattended" ? "take-default" : "keep-waiting"),
-        auto_approve: autonomy === "unattended",
+        question_timeout_hours: numFlag("question-timeout") ?? 8,
+        on_timeout: flag("on-timeout") ?? "keep-waiting",
+        auto_approve: false,
       },
-      pack: str(flags, "pack") ?? (defaultPack ? `${defaultPack.name}@${defaultPack.version}` : undefined),
-      opencode: str(flags, "opencode") ?? "2.0.15",
+      pack,
+      opencode: flag("opencode") ?? "2.0.15",
     })
     await ensureDir(paths.slate)
     await saveProjectConfig(root, config)
     let providerNote = ""
-    if (!bool(flags, "skip-check") && !out.json) {
+    if (!fromCatalog && !bool(flags, "skip-check") && !out.json) {
       const key = process.env[`${config.provider.toUpperCase()}_API_KEY`]
       if (!key) providerNote = `note: ${config.provider.toUpperCase()}_API_KEY is not set in this shell; OpenCode needs credentials for '${config.provider}' before \`slate start\`.`
     }
     out.emit(
-      () => [`initialized ${config.name} in ${root}`, `  config: slate.config.yml`, `  pack:   ${config.pack ?? "(none installed; run slate pack add <dir>)"}`, `  models: low=${config.models.low} medium=${config.models.medium} high=${config.models.high}`, ...(providerNote ? [providerNote] : [])],
+      () => [`initialized ${config.name} in ${root}`, `  config: slate.config.yml`, `  pack:   ${config.pack ?? "(chosen with you during discovery)"}`, `  models: low=${config.models.low} medium=${config.models.medium} high=${config.models.high}`, ...(providerNote ? [providerNote] : [])],
       { root, config, note: providerNote || undefined },
     )
-    return 0
+    if (!interactive || bool(flags, "no-discover")) {
+      out.line("next: `slate discover` to describe what to build, then `slate start`")
+      return 0
+    }
+    out.line("")
+    return reportDiscovery(await runDiscovery(paths, config), out)
   },
 )
 
-async function readLine(): Promise<string> {
-  const reader = Bun.stdin.stream().getReader()
-  const { value } = await reader.read()
-  reader.releaseLock()
-  return value ? new TextDecoder().decode(value) : ""
+/* ------------------------------------------------------------------ discover */
+
+register(
+  "discover",
+  `slate discover [--new]
+Opens the discovery conversation in OpenCode. Slate's discovery agent interviews you, helps you pick
+the workflow pack, then writes .slate/brief.md and the pack's discovery documents (for the reference
+pack: specs/product-scope.md, specs/uiux-spec.md, specs/tech-spec.md). Quit OpenCode when it is done.
+Running it again reopens the same conversation until those files exist; --new starts a fresh one.
+Discovery always needs you present, so it needs a terminal.`,
+  async (argv, out) => {
+    const { flags } = parseArgs(["discover", ...argv])
+    const p = await requireProject()
+    if (!process.stdin.isTTY || out.json) throw new CliError("discovery is a live conversation and needs a terminal", "run `slate discover` in an interactive shell")
+    return reportDiscovery(await runDiscovery(p.paths, p.config, { fresh: bool(flags, "new") }), out)
+  },
+)
+
+function reportDiscovery(check: DiscoveryCheck, out: Output): number {
+  if (check.done) {
+    out.emit(() => [`discovery done: pack ${check.pack!.name}@${check.pack!.version}`, "next: `slate start` to plan and build"], { done: true, pack: `${check.pack!.name}@${check.pack!.version}` })
+    return 0
+  }
+  out.emit(() => ["discovery is not finished; still missing:", ...check.missing.map((m) => `  ${m}`), "run `slate discover` to continue the conversation"], { done: false, missing: check.missing })
+  return 1
 }
+
+const ANTHROPIC_MODELS = { low: "claude-haiku-4-5-20251001", medium: "claude-sonnet-5", high: "claude-opus-5-5" }
+
+type TierModels = { low: string; medium: string; high: string }
+
+/**
+ * Provider and per-tier models. Interactively, the choices come from what the user's OpenCode has
+ * connected, so nothing is typed; flags fill in or skip any of it. Without a TTY (or if OpenCode
+ * cannot be read) it falls back to flags and Anthropic defaults.
+ */
+async function chooseModels(interactive: boolean, given: { provider?: string } & Partial<TierModels>): Promise<{ provider: string; models: TierModels; fromCatalog: boolean }> {
+  const tiers = ["low", "medium", "high"] as const
+  const complete = given.provider && tiers.every((t) => given[t])
+  if (interactive && !complete) {
+    const catalog = await spin("reading connected providers from OpenCode…", loadCatalog()).catch((e: Error) => {
+      process.stderr.write(`could not read providers from OpenCode (${e.message.split("\n")[0]}); type them instead\n`)
+      return undefined
+    })
+    if (catalog) {
+      if (!catalog.providers.length) throw new CliError("no model provider is connected in OpenCode", "connect one in OpenCode (log in, or set its API key env var such as ANTHROPIC_API_KEY), then re-run `slate init`")
+      const count = (id: string) => catalog.models.filter((m) => m.providerID === id).length
+      let provider = given.provider
+      if (!provider && catalog.providers.length === 1) answered("provider", (provider = catalog.providers[0]!.id))
+      provider ??= await select(
+        "provider",
+        catalog.providers.map((p) => ({ value: p.id, label: p.name === p.id ? p.id : `${p.name} (${p.id})`, hint: `${count(p.id)} models` })),
+        catalog.providers.find((p) => p.id === "anthropic")?.id,
+      )
+      const available = catalog.models.filter((m) => m.providerID === provider)
+      if (!available.length) throw new CliError(`provider '${provider}' has no usable models in OpenCode`, `connected: ${catalog.providers.map((p) => p.id).join(", ")}`)
+      const defs = defaultTiers(available, ANTHROPIC_MODELS)
+      const price = (m: CatalogModel) => (m.cost ? m.cost.input + m.cost.output : Infinity)
+      const choices = [...available].sort((a, b) => price(a) - price(b) || a.name.localeCompare(b.name)).map((m) => ({ value: m.id, label: m.id, hint: modelHint(m) }))
+      const models = {} as TierModels
+      for (const t of tiers) models[t] = given[t] ?? (await select(`model for ${t} tier`, choices, defs[t]))
+      return { provider, models, fromCatalog: true }
+    }
+  }
+  const provider = given.provider ?? (interactive ? await input("provider id (as OpenCode names it)", { def: "anthropic" }) : "anthropic")
+  const defaults = provider === "anthropic" ? ANTHROPIC_MODELS : undefined
+  const models = {} as TierModels
+  for (const t of tiers) {
+    const m = given[t] ?? (interactive ? await input(`model for ${t} tier`, { def: defaults?.[t] }) : defaults?.[t])
+    if (!m) throw new CliError(`no default models for provider '${provider}'`, "pass --low, --medium and --high")
+    models[t] = m
+  }
+  return { provider, models, fromCatalog: false }
+}
+
+/** A budget cap for display; unset or 0 means no cap. */
+function cap(n: number | undefined): string {
+  return n ? usd(n) : "no cap"
+}
+
+/** "$3/$15 per Mtok · 200k ctx" */
+function modelHint(m: CatalogModel): string {
+  const parts: string[] = []
+  if (m.name !== m.id) parts.push(m.name)
+  if (m.cost) parts.push(m.cost.input + m.cost.output === 0 ? "free" : `$${m.cost.input}/$${m.cost.output} per Mtok`)
+  if (m.context) parts.push(m.context >= 1_000_000 ? `${+(m.context / 1_000_000).toFixed(1)}M ctx` : `${Math.round(m.context / 1000)}k ctx`)
+  return parts.join(" · ")
+}
+
+const AUTONOMY = [
+  { value: "supervised", hint: "you approve gates; questions wait up to 8h" },
+  { value: "unattended", hint: "approvals take the default; questions time out after 1h" },
+] as const
 
 /* --------------------------------------------------------------------- start */
 
 register(
   "start",
-  `slate start [--idea "text" | --brief FILE] [--pack name[@version]] [--yes] [--dry-run] [--detach] [--quiet]
-Starts a job. Intake writes .slate/brief.md, a pack is proposed and confirmed, then discovery, plan (approval), build, close.
-  --yes      answer every approval and pack proposal with the default (unattended)
-  --dry-run  run the whole loop with a fake runtime that writes the contract files (no model calls)
-  --detach   run the engine in the background; use \`slate continue\` to attach
-Fails when a job is already open.`,
+  `slate start [--autonomy supervised|unattended | --yes] [--detach] [--quiet]
+            [--dry-run [--idea "text" | --brief FILE] [--pack name[@version]]]
+Starts a job from a finished discovery (\`slate discover\`): plan (approval), build, close.
+  --autonomy supervised   runs here; you answer approvals and questions as they come (the default)
+  --autonomy unattended   approvals take their default and the job runs in the background
+  --yes                   same as --autonomy unattended
+  --detach                run a supervised job in the background too; answer with \`slate inbox\`
+  --dry-run               fake runtime, no model calls; may skip discovery and start from --idea or --brief
+Asks for the autonomy when it is not given and there is a terminal. Fails when a job is already open.`,
   async (argv, out) => {
     const { flags } = parseArgs(["start", ...argv])
     const p = await requireProject()
-    const opts: RunOptions = {
-      dryRun: bool(flags, "dry-run"),
-      autoApprove: bool(flags, "yes", "y"),
-      quiet: bool(flags, "quiet", "q"),
-      packRef: str(flags, "pack"),
-      idea: str(flags, "idea"),
-      briefPath: str(flags, "brief"),
+    const interactive = process.stdin.isTTY && !out.json
+    const dryRun = bool(flags, "dry-run")
+    const opts: RunOptions = { dryRun, autoApprove: false, quiet: bool(flags, "quiet", "q") }
+
+    // Discovery must be finished (and not used by an earlier job) before anything runs.
+    let record = await readDiscovery(p.paths)
+    let check = record.job ? { done: false, missing: ["a new discovery (the last one was used by job " + record.job + ")"] } : await checkDiscovery(p.paths)
+    if (!check.done && dryRun && (str(flags, "idea") || str(flags, "brief") || (!record.job && (await isFile(p.paths.brief))))) {
+      // Dry runs can still exercise intake from an idea or a brief.
+      Object.assign(opts, { idea: str(flags, "idea"), briefPath: str(flags, "brief"), packRef: str(flags, "pack") })
+    } else if (!check.done) {
+      const open = interactive && (await select("discovery isn't finished. Open it in OpenCode now?", [{ value: "yes" }, { value: "no" }], "yes")) === "yes"
+      if (open) check = await runDiscovery(p.paths, p.config, { fresh: !!record.job })
+      if (!check.done) throw new CliError(`discovery isn't finished; missing: ${check.missing.join(", ")}`, "run `slate discover`, then `slate start`")
+      record = await readDiscovery(p.paths)
     }
-    if (!opts.idea && !opts.briefPath && !(await isFile(p.paths.brief))) {
-      if (process.stdin.isTTY && !out.json) {
-        process.stdout.write("What should this job build? (one paragraph, then Enter)\n> ")
-        opts.idea = (await readLine()).trim()
-      }
-      if (!opts.idea) throw new CliError("nothing to start from", "pass --idea \"...\" or --brief FILE")
-    }
-    if (!opts.dryRun) {
-      const rt = makeRuntime(p, false, () => undefined)
-      void rt
-    }
-    const store = await createJob(p, opts)
-    if (bool(flags, "detach")) {
+
+    const autonomyFlag = bool(flags, "yes", "y") ? "unattended" : str(flags, "autonomy")
+    if (autonomyFlag && autonomyFlag !== "supervised" && autonomyFlag !== "unattended") throw new CliError(`--autonomy must be supervised or unattended, not '${autonomyFlag}'`)
+    const autonomy = autonomyFlag ?? (interactive ? await select("autonomy", AUTONOMY, "supervised") : "supervised")
+    opts.autoApprove = autonomy === "unattended"
+
+    const store = await createJob(p, { ...opts, discovered: check.done ? check.pack : undefined })
+    const jobId = store.get().job.id
+    if (check.done) await writeDiscovery(p.paths, { ...record, job: jobId })
+    if (opts.autoApprove || bool(flags, "detach")) {
       const pid = await runDetached(p, opts)
-      out.emit(() => [`job ${store.get().job.id} started in the background (pid ${pid})`, `  slate status   to see progress`, `  slate continue to attach`], { job: store.get().job.id, pid, detached: true })
+      out.emit(() => [`job ${jobId} started in the background (${autonomy}, pid ${pid})`, `  slate status   to see progress`, `  slate inbox    to answer questions`, `  slate continue to attach`], { job: jobId, pid, detached: true, autonomy })
       return 0
     }
     const state = await runForeground(p, store, opts, out)
@@ -225,13 +329,13 @@ spend per model, task and story, and steps that failed their output contract. Fa
     for (const b of branches) lines.push(`  ${b.id.padEnd(28)} ${b.status.padEnd(8)} ${b.current ? `at ${b.current}` : ""}${b.blockedOn ? ` waiting on ${b.blockedOn}` : ""}  (${ageOf(b.since)})`)
     if (running.length) lines.push(`running steps: ${running.map((r) => r.key).join(", ")}`)
     lines.push("")
-    lines.push(`spend: ${usd(st.spend.total)} of ${usd(p.config.budget.job)}   tokens in/out ${st.spend.tokens.input}/${st.spend.tokens.output}`)
+    lines.push(`spend: ${usd(st.spend.total)} of ${cap(p.config.budget.job)}   tokens in/out ${st.spend.tokens.input}/${st.spend.tokens.output}`)
     const byModel = Object.entries(st.spend.byModel).sort((a, b) => b[1] - a[1])
     if (byModel.length) lines.push(...table(byModel.map(([m, c]) => [m, usd(c)]), { header: ["model", "spend"], indent: "  " }))
     const byStory = Object.entries(st.spend.byStory).sort((a, b) => b[1] - a[1])
     if (byStory.length) lines.push(...table(byStory.map(([m, c]) => [m, usd(c)]), { header: ["story", "spend"], indent: "  " }))
     const byTask = Object.entries(st.spend.byTask).sort((a, b) => b[1] - a[1]).slice(0, 15)
-    if (byTask.length) lines.push(...table(byTask.map(([m, c]) => [m, `${usd(c)} / ${usd(p.config.budget.per_task)}`]), { header: ["task", "spend / cap"], indent: "  " }))
+    if (byTask.length) lines.push(...table(byTask.map(([m, c]) => [m, `${usd(c)} / ${cap(p.config.budget.per_task)}`]), { header: ["task", "spend / cap"], indent: "  " }))
     lines.push("")
     lines.push(`contract failures: ${failures.length} (${failures.filter((f) => f.retried).length} re-prompted)`)
     for (const f of failures.slice(-8)) lines.push(`  ${f.key}: missing ${f.missing.join(", ") || "(bad verdict)"}${f.retried ? " -> re-prompted" : ""}`)
@@ -276,11 +380,10 @@ Non-interactive: \`slate inbox --answer <qid> <option> [--message "..."]\`. Work
     }
     for (const [i, q] of open.entries()) {
       out.line(`\n(${i + 1}/${open.length}) ${formatQuestion(q).join("\n")}`)
-      process.stdout.write(`answer (${q.options.map((o) => o.id).join("/") || "text"}; Enter to skip, q to quit): `)
-      const line = (await readLine()).trim()
-      if (line === "q") break
-      if (!line) continue
-      const [option, ...rest] = line.split(/\s+/)
+      const answer = await line(`answer (${q.options.map((o) => o.id).join("/") || "text"}; Enter to skip, q to quit):`)
+      if (answer === "q") break
+      if (!answer) continue
+      const [option, ...rest] = answer.split(/\s+/)
       const message = rest.join(" ") || undefined
       if (!isValidAnswer(q, option!)) {
         out.line(`  not one of ${q.options.map((o) => o.id).join(", ")}; skipped`)

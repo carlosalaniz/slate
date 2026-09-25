@@ -18,14 +18,14 @@ export const ProjectConfigSchema = z.object({
       high: z.string().min(1),
     })
     .default({ low: "claude-haiku-4-5-20251001", medium: "claude-sonnet-5", high: "claude-opus-5-5" }),
-  /** Caps in USD; 0 means no cap. Hitting one stops the job: raise it here, then `slate continue`. */
+  /** Caps in USD; omitted or 0 means no cap. Hitting one stops the job: raise it here, then `slate continue`. */
   budget: z
     .object({
-      job: z.number().nonnegative().default(200),
-      per_task: z.number().nonnegative().default(5),
+      job: z.number().nonnegative().optional(),
+      per_task: z.number().nonnegative().optional(),
       per_model: z.record(z.string(), z.number().nonnegative()).default({}),
     })
-    .default({ job: 200, per_task: 5, per_model: {} }),
+    .default({ per_model: {} }),
   autonomy: z
     .object({
       question_timeout_hours: z.number().nonnegative().default(8),

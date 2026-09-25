@@ -47,9 +47,9 @@ export function budgetHit(engine: Engine, vars: Record<string, string>): BudgetH
     cap,
     message: `budget reached for ${scope}: ${usd(spent)} of ${usd(cap)}. Raise ${key} in slate.config.yml, then run slate continue.`,
   })
-  if (b.job > 0 && sp.total >= b.job) return hit("the job", sp.total, b.job, "budget.job")
+  if (b.job && sp.total >= b.job) return hit("the job", sp.total, b.job, "budget.job")
   const task = vars.task
-  if (task && b.per_task > 0 && (sp.byTask[task] ?? 0) >= b.per_task) return hit(`task ${task}`, sp.byTask[task]!, b.per_task, "budget.per_task")
+  if (task && b.per_task && (sp.byTask[task] ?? 0) >= b.per_task) return hit(`task ${task}`, sp.byTask[task]!, b.per_task, "budget.per_task")
   for (const [model, cap] of Object.entries(b.per_model)) {
     // Caps may name `provider/model` or just `model`.
     const spent = Object.entries(sp.byModel)
