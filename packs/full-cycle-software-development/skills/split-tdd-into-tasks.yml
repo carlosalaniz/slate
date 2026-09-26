@@ -10,5 +10,9 @@ prompt: |
       acceptance: [ ... ]
       scope: { modify: ["src/feature/**", "tests/feature/**"] }
   ```
-  Task ids must start with `{story}-`. Scopes must be disjoint (no two tasks may modify the same
-  files); a script checks this. Order tasks so each builds on the previous.
+  Task ids must start with `{story}-`. A scope lists every file or folder the task creates or
+  changes, anywhere in the project (source, tests, assets such as `public/**`, config files), and
+  nothing else: the builder can edit only those. Scopes must be disjoint (no two tasks may modify
+  the same files), must not reach into `specs/`, `stories/`, `tasks/` or `.slate/`, and must not
+  cover the whole project (`**`, `**/*.ts`); a script checks this. Order tasks so each builds on the
+  previous.

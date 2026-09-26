@@ -2,7 +2,7 @@ import path from "node:path"
 import { Engine } from "../../engine/engine.ts"
 import { StateStore } from "../../engine/state.ts"
 import { AuditLog } from "../../engine/audit.ts"
-import { newJobState, type JobState, type Runtime } from "../../engine/types.ts"
+import { newJobState, type Autonomy, type JobState, type Runtime } from "../../engine/types.ts"
 import { FakeRuntime } from "../../opencode/fake.ts"
 import { OpenCodeRuntime } from "../../opencode/adapter.ts"
 import { listInstalledPacks, findPack, type InstalledPack } from "../../pack/registry.ts"
@@ -18,6 +18,8 @@ import { followJob } from "../logview.ts"
 export interface RunOptions {
   dryRun: boolean
   autoApprove: boolean
+  /** Chosen at start; unattended when autoApprove. Resumed jobs keep the saved one. */
+  autonomy?: Autonomy
   quiet: boolean
   packRef?: string
   idea?: string
@@ -49,7 +51,7 @@ export async function createJob(p: ProjectCtx, opts: RunOptions): Promise<StateS
   await ensureDir(p.paths.control)
   const state: JobState = newJobState({ id: shortId(slug(p.config.name)), name: p.config.name, opencode: p.config.opencode, runtime: opts.dryRun ? "fake" : "opencode", idea: opts.idea })
   // Saved so `slate continue` and the background engine keep the autonomy chosen at start.
-  state.job.autonomy = opts.autoApprove ? "unattended" : "supervised"
+  state.job.autonomy = opts.autoApprove ? "unattended" : (opts.autonomy ?? "supervised")
   if (opts.discovered) {
     // Discovery already wrote the brief and the discovery documents with the user.
     state.job.pack = { name: opts.discovered.name, version: opts.discovered.version, dir: opts.discovered.dir }
@@ -97,6 +99,7 @@ export async function buildEngine(p: ProjectCtx, store: StateStore, opts: RunOpt
     installedPacks: installed,
     pack,
     autoApprove: opts.autoApprove || state.job.autonomy === "unattended" || p.config.autonomy.auto_approve,
+    autonomy: opts.autoApprove || p.config.autonomy.auto_approve ? "unattended" : (state.job.autonomy ?? "supervised"),
     log,
   })
 }

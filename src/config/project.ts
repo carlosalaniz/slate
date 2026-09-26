@@ -8,6 +8,19 @@ export type Tier = z.infer<typeof TierSchema>
 
 export const ExhaustedPolicySimple = z.enum(["ask-human", "ask-decision-agent", "fail"])
 
+/** What a supervised job still asks you about: anything that leaves the project, publishes or destroys. */
+export const DEFAULT_ASK_BEFORE = [
+  "shell git push*",
+  "shell git reset --hard*",
+  "shell git clean*",
+  "shell rm -rf*",
+  "shell sudo *",
+  "shell curl *",
+  "shell wget *",
+  "external_directory *",
+  "webfetch *",
+]
+
 export const ProjectConfigSchema = z.object({
   name: z.string().min(1).default("slate-job"),
   provider: z.string().min(1).default("anthropic"),
@@ -31,8 +44,13 @@ export const ProjectConfigSchema = z.object({
       question_timeout_hours: z.number().nonnegative().default(8),
       on_timeout: z.enum(["keep-waiting", "take-default", "escalate"]).default("keep-waiting"),
       auto_approve: z.boolean().default(false),
+      /**
+       * Supervised jobs allow an agent's routine permission requests by themselves and ask you only
+       * for these, as "<action> <pattern>" (`*` matches anything; shell patterns see the command).
+       */
+      ask_before: z.array(z.string().min(1)).default(DEFAULT_ASK_BEFORE),
     })
-    .default({ question_timeout_hours: 8, on_timeout: "keep-waiting", auto_approve: false }),
+    .default({ question_timeout_hours: 8, on_timeout: "keep-waiting", auto_approve: false, ask_before: DEFAULT_ASK_BEFORE }),
   pack: z.string().optional(),
   opencode: z.string().default("2.0.15"),
   runtime: z

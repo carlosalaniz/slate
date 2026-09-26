@@ -28,7 +28,7 @@ export class FakeRuntime implements Runtime {
   readonly kind = "fake" as const
   private job!: JobContext
   private counts = new Map<string, number>()
-  public readonly calls: { step: string; key: string; agent: string; model: string; directory: string; prompt: string }[] = []
+  public readonly calls: { step: string; key: string; agent: string; model: string; directory: string; prompt: string; permissions: RunStepRequest["permissions"] }[] = []
   public readonly reprompts: string[] = []
   public readonly reviewsMade: ReviewRequest[] = []
   public readonly replies: QuestionReply[] = []
@@ -54,7 +54,7 @@ export class FakeRuntime implements Runtime {
   async runStep(req: RunStepRequest): Promise<RunStepResult> {
     const n = (this.counts.get(req.stepId) ?? 0) + 1
     this.counts.set(req.stepId, n)
-    this.calls.push({ step: req.stepId, key: req.key, agent: req.agent.id, model: req.model.id, directory: req.directory, prompt: req.prompt })
+    this.calls.push({ step: req.stepId, key: req.key, agent: req.agent.id, model: req.model.id, directory: req.directory, prompt: req.prompt, permissions: req.permissions })
     if (this.opts.delayMs) await new Promise((r) => setTimeout(r, this.opts.delayMs))
     const behavior = this.behaviorFor(req.stepId)
     const custom = behavior?.run ? await behavior.run(req, n) : {}

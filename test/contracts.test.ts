@@ -6,6 +6,8 @@ import { loadCorePack, renderMessage, renderPrompt } from "../src/engine/core-pa
 import { parseFrontmatter, readField } from "../src/util/frontmatter.ts"
 import { resolveRuntime, resolveConfigValue } from "../src/engine/vars.ts"
 import { tmpProject, referencePackDir } from "./helpers.ts"
+import { asksBefore } from "../src/engine/inbox.ts"
+import { DEFAULT_ASK_BEFORE } from "../src/config/project.ts"
 
 describe("contracts", () => {
   test("missing writes fail", async () => {
@@ -105,5 +107,41 @@ describe("YAML/JSON outputs must parse", () => {
     const answer = JSON.parse(run.stdout.toString())
     expect(answer.ok).toBe(false)
     expect(answer.reason).toContain("stories/s1/tasks.yaml is not valid YAML")
+  })
+})
+
+describe("check-task-scopes", () => {
+  const check = async (yaml: string) => {
+    const root = await tmpProject()
+    await Bun.write(path.join(root, "stories/s1/tasks.yaml"), yaml)
+    const script = path.join(referencePackDir(), "scripts/scripts/check-task-scopes.ts")
+    const run = Bun.spawnSync([process.execPath, script, "s1"], { env: { ...process.env, SLATE_WORKSPACE: root } })
+    return JSON.parse(run.stdout.toString()) as { ok: boolean; reason?: string }
+  }
+  const task = (id: string, ...globs: string[]) => `  - id: ${id}\n    scope: { modify: [${globs.map((g) => `"${g}"`).join(", ")}] }\n`
+
+  test("any project files pass, as long as tasks stay disjoint", async () => {
+    expect((await check(`tasks:\n${task("s1-t1", "src/lib/**", "public/audio/**")}${task("s1-t2", "index.html", "vite.config.ts")}`)).ok).toBe(true)
+  })
+
+  test("scopes in the pack's own folders or over the whole project fail", async () => {
+    const answer = await check(`tasks:\n${task("s1-t1", "stories/s1/TDD.md")}${task("s1-t2", "./tasks/**")}${task("s1-t3", "**/*.ts")}`)
+    expect(answer.ok).toBe(false)
+    expect(answer.reason).toContain("stories/s1/TDD.md reaches into stories/")
+    expect(answer.reason).toContain("./tasks/** reaches into tasks/")
+    expect(answer.reason).toContain("**/*.ts covers the whole project")
+  })
+})
+
+describe("supervised asks only before risky permissions", () => {
+  test("ask_before patterns match the action and the command", async () => {
+    const ask = (action: string, resource: string) => asksBefore(DEFAULT_ASK_BEFORE, action, [resource])
+    expect(ask("shell", 'python3 -c "import yaml"')).toBe(false)
+    expect(ask("shell", "npm test")).toBe(false)
+    expect(ask("shell", "git push origin main")).toBe(true)
+    expect(ask("shell", "rm -rf node_modules")).toBe(true)
+    expect(ask("shell", "curl https://example.com")).toBe(true)
+    expect(ask("external_directory", "/Users/x/other/*")).toBe(true)
+    expect(ask("edit", "src/app.ts")).toBe(false)
   })
 })

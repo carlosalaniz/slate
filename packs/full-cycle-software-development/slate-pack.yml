@@ -100,7 +100,9 @@ phases:
                       type: skill
                       skill: work-on-task
                       by: builder
-                      scope: { from: "stories/{story}/tasks.yaml#{task}.scope", within: { modify: ["src/**", "tests/**", "tasks/**"] } }
+                      # The task's scope from tasks.yaml is the limit; check-task-scopes keeps it out of the
+                      # pack's own folders. The build report is always writable (it is in `writes`).
+                      scope: { from: "stories/{story}/tasks.yaml#{task}.scope" }
                       consult: { agents: [architect], max: 2, steps: 6 }
                       gates:
                         - on: { action: shell, resource: "npm install*" }

@@ -28,6 +28,19 @@ describe("log view", () => {
     ])
   })
 
+  test("permissions the job's autonomy allowed stay out of the log; rejections show", () => {
+    const view = new LogView()
+    const lines = view.events([
+      rec("02:48:40", { type: "step.start", key, step: "write-tdd", branch: "story:s2", agent: "architect", vars: { story: "s2" } }),
+      rec("02:48:42", { type: "question.open", id: "q3", kind: "permission", branch: "story:s2", prompt: "Agent architect in write-tdd asks permission: shell ls -la tasks/", key }),
+      rec("02:48:42", { type: "question.answered", id: "q3", answer: "once", by: "policy" }),
+      rec("02:48:43", { type: "question.open", id: "q4", kind: "permission", branch: "story:s2", prompt: "Agent architect in write-tdd asks permission: shell git push", key }),
+      rec("02:48:50", { type: "question.answered", id: "q4", answer: "reject", by: "human" }),
+    ])
+    expect(lines.map((l) => l.replace(/\s+/g, " "))).toEqual(["02:48:40 architect starts write-tdd · s2", "02:48:50 architect permission shell git push → reject · s2"])
+    expect(view.events([])).toEqual([])
+  })
+
   test("a nested loop is tagged with its innermost item", () => {
     const view = new LogView()
     const lines = view.events([
@@ -41,7 +54,9 @@ describe("log view", () => {
   test("a permission nobody answered yet shows as waiting on you", () => {
     const view = new LogView()
     view.events([rec("01:43:00", { type: "step.start", key, step: "write-tdd", branch: "story:s1", agent: "architect", vars: { story: "s1" } })])
-    const lines = view.events([rec("01:43:04", { type: "question.open", id: "q2", kind: "permission", branch: "story:s1", prompt: "Agent architect in write-tdd asks permission: shell npm test", key })])
+    expect(view.events([rec("01:43:04", { type: "question.open", id: "q2", kind: "permission", branch: "story:s1", prompt: "Agent architect in write-tdd asks permission: shell npm test", key })])).toEqual([])
+    // Still open on the next read: it really waits on a person.
+    const lines = view.events([])
     expect(lines[0]!.replace(/\s+/g, " ")).toBe("01:43:04 architect waiting on you: permission shell npm test [q2] · s1")
   })
 

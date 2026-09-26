@@ -1,7 +1,8 @@
 description: Implements one task at a time with tests, inside the task's file scope.
 role: worker
 model: low
-scope: { modify: ["src/**", "tests/**", "tasks/**"] }
+# Any project file: each build step narrows this to its task's scope from tasks.yaml.
+scope: { modify: ["**"] }
 # Builds and runs tests in the project, so shell commands run without asking.
 permissions:
   - { action: shell, resource: "*", effect: allow }

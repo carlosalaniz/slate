@@ -26,14 +26,27 @@ budget:
   per_task: 5         # per task
   per_model: {}       # e.g. { "anthropic/claude-opus-5-5": 50 }
 
-# How the job behaves when it needs a human and none is around.
+# How the job behaves when it needs a human. How much it asks is chosen per job at `slate start`:
+# strict (every permission), supervised (decisions + ask_before below), unattended (nothing).
 autonomy:
   # How long a question waits before the timeout policy below applies.
   question_timeout_hours: 8
   # keep-waiting: wait forever | take-default: pick the default option | escalate: keep waiting but log loudly
   on_timeout: keep-waiting
-  # true = answer every approval and pack proposal with the default (unattended mode).
+  # true = every job runs unattended, whatever `slate start` chose.
   auto_approve: false
+  # What a supervised job still asks you about, as "<action> <pattern>" (`*` matches anything; for
+  # shell the pattern sees the command). Everything else an agent needs goes on by itself.
+  ask_before:
+    - shell git push*
+    - shell git reset --hard*
+    - shell git clean*
+    - shell rm -rf*
+    - shell sudo *
+    - shell curl *
+    - shell wget *
+    - external_directory *
+    - webfetch *
 
 # Which workflow pack to use. Omit to let intake propose one from the installed packs.
 # pack: full-cycle-software-development@0.1.0

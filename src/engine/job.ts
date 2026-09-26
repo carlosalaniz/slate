@@ -3,7 +3,7 @@ import type { ProjectPaths } from "../config/paths.ts"
 import type { InstalledPack } from "../pack/registry.ts"
 import type { StateStore } from "./state.ts"
 import type { AuditLog } from "./audit.ts"
-import type { JobState, LoadedPack, Phase, Question, Runtime } from "./types.ts"
+import type { Autonomy, JobState, LoadedPack, Phase, Question, Runtime } from "./types.ts"
 
 /**
  * job — the shapes every engine file shares: options, the per-branch context, and step results.
@@ -19,6 +19,8 @@ export interface EngineOptions {
   installedPacks: InstalledPack[]
   pack?: LoadedPack
   autoApprove?: boolean
+  /** How much the job asks; `unattended` implies autoApprove. */
+  autonomy?: Autonomy
   log?: (line: string) => void
   pollMs?: number
   /** Called whenever a question opens; the CLI uses it to print a notice. */

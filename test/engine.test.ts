@@ -10,6 +10,7 @@ import { FakeRuntime, type FakeOptions } from "../src/opencode/fake.ts"
 import { projectPaths } from "../src/config/paths.ts"
 import { loadPack } from "../src/pack/loader.ts"
 import type { ProjectConfig } from "../src/config/project.ts"
+import { relayRuntimeQuestion } from "../src/engine/inbox.ts"
 
 const nextScript = (values: string[]) => ({
   yml: { description: "next", run: "bun $SLATE_PACK/scripts/scripts/next.ts", timeout: "10s" },
@@ -341,7 +342,7 @@ describe("engine", () => {
           skill: "make",
           by: "worker",
           scope: { from: "stories/s1/tasks.yaml#s1-t1.scope", within: { modify: ["src/**", "tests/**"] } },
-          writes: ["src/x.md"],
+          writes: ["out/b-report.md"],
         },
       ]),
       files,
@@ -353,6 +354,9 @@ describe("engine", () => {
     const call = h.runtime.calls[0]!
     expect(call.prompt).toContain("src/a/**")
     expect(call.prompt).not.toContain("docs/**")
+    // The step's own report is editable even though the task scope does not list it.
+    expect(call.permissions).toContainEqual({ action: "edit", resource: "out/b-report.md", effect: "allow" })
+    expect(call.permissions).toContainEqual({ action: "edit", resource: "src/a/**", effect: "allow" })
   })
 })
 
@@ -375,4 +379,25 @@ describe("engine intake", () => {
     expect(st.job.pack?.name).toBe("p")
     expect((await readFile(paths.brief, "utf8")).length).toBeGreaterThan(0)
   })
+})
+
+describe("autonomy levels", () => {
+  const step = { id: "build", type: "skill", skill: "make", by: "worker", writes: [] } as never
+  const ctx = { prefix: "build", branch: "main", vars: {}, directory: "/", phase: "build", untilStack: [] } as never
+  const ask = (command: string) => ({ kind: "permission" as const, sessionID: "s", requestID: command, action: "shell", resources: [command] })
+
+  for (const [autonomy, routine, risky] of [
+    ["supervised", "policy", undefined],
+    ["strict", undefined, undefined],
+    ["unattended", "policy", "policy"],
+  ] as const) {
+    test(`${autonomy}: routine permission ${routine ? "goes through" : "asks"}, risky ${risky ? "goes through" : "asks"}`, async () => {
+      const h = await harness({ manifest: manifest([{ id: "w", type: "skill", skill: "make", by: "worker", writes: ["w.md"] }]), files, engine: { autonomy, autoApprove: autonomy === "unattended" } })
+      await relayRuntimeQuestion(h.engine, ask('python3 -c "import yaml"'), ctx, step, "build/w")
+      await relayRuntimeQuestion(h.engine, ask("git push origin main"), ctx, step, "build/w")
+      const [a, b] = h.engine.state.questions
+      expect(a!.answered?.by).toBe(routine)
+      expect(b!.answered?.by).toBe(risky)
+    })
+  }
 })

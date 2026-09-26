@@ -18,7 +18,7 @@ import { loadInitDefaults, DEFAULTS_FILE } from "../../config/init-defaults.ts"
 import { readOpenCodeKeys } from "../../opencode/credentials.ts"
 import { StateStore } from "../../engine/state.ts"
 import { AuditLog } from "../../engine/audit.ts"
-import type { Question, JobState } from "../../engine/types.ts"
+import type { Question, JobState, Autonomy } from "../../engine/types.ts"
 import { listInstalledPacks, addPack, updatePack, validatePackDir, findPack } from "../../pack/registry.ts"
 import { ensureDir, writeJsonAtomic, writeText, readTextOr, isFile, removePath } from "../../util/fs.ts"
 import { ageOf, usd, sleep } from "../../util/time.ts"
@@ -288,19 +288,23 @@ function modelHint(m: CatalogModel): string {
 }
 
 const AUTONOMY = [
-  { value: "supervised", hint: "you approve gates; questions wait up to 8h" },
-  { value: "unattended", hint: "approvals take the default; questions time out after 1h" },
+  { value: "supervised", label: "supervised (Recommended)", hint: "asks for decisions and risky commands; routine work goes on" },
+  { value: "strict", hint: "asks before every permission an agent needs" },
+  { value: "unattended", hint: "takes the default everywhere; runs in the background" },
 ] as const
 
 /* --------------------------------------------------------------------- start */
 
 register(
   "start",
-  `slate start [--autonomy supervised|unattended | --yes] [--detach] [--quiet]
+  `slate start [--autonomy supervised|strict|unattended | --yes] [--detach] [--quiet]
             [--dry-run [--idea "text" | --brief FILE] [--pack name[@version]]]
 Starts a job from a finished discovery (\`slate discover\`): plan (approval), build, close.
-  --autonomy supervised   runs here; you answer approvals and questions as they come (the default)
-  --autonomy unattended   approvals take their default and the job runs in the background
+  --autonomy supervised   runs here; asks you for approvals, questions, gates and the risky commands in
+                          autonomy.ask_before (git push, rm -rf, network, outside the project); routine work
+                          goes on by itself (the default)
+  --autonomy strict       runs here; also asks before every permission an agent needs
+  --autonomy unattended   takes the default everywhere and runs in the background
   --yes                   same as --autonomy unattended
   --detach                run a supervised job in the background too; answer with \`slate inbox\`
   --dry-run               fake runtime, no model calls; may skip discovery and start from --idea or --brief
@@ -328,9 +332,10 @@ Asks for the autonomy when it is not given and there is a terminal. Fails when a
     }
 
     const autonomyFlag = bool(flags, "yes", "y") ? "unattended" : str(flags, "autonomy")
-    if (autonomyFlag && autonomyFlag !== "supervised" && autonomyFlag !== "unattended") throw new CliError(`--autonomy must be supervised or unattended, not '${autonomyFlag}'`)
-    const autonomy = autonomyFlag ?? (interactive ? await select("autonomy", AUTONOMY, "supervised") : "supervised")
+    if (autonomyFlag && !AUTONOMY.some((a) => a.value === autonomyFlag)) throw new CliError(`--autonomy must be supervised, strict or unattended, not '${autonomyFlag}'`)
+    const autonomy = (autonomyFlag ?? (interactive ? await select("autonomy", AUTONOMY, "supervised") : "supervised")) as Autonomy
     opts.autoApprove = autonomy === "unattended"
+    opts.autonomy = autonomy
 
     const store = await createJob(p, { ...opts, discovered: check.done ? check.pack : undefined })
     const jobId = store.get().job.id
@@ -360,24 +365,45 @@ register("_run", "internal", async (argv, out) => {
 
 register(
   "continue",
-  `slate continue [--yes] [--detach] [--quiet]
+  `slate continue [--autonomy supervised|strict|unattended | --yes] [--detach] [--quiet]
 Reattaches to the current job. If an engine process is running, streams its log and status until it finishes or you press Ctrl-C
 (the job keeps running). If the job is stopped, blocked or was interrupted, resumes it from state.json: here for a
 supervised job, in the background (and watched from here) for an unattended one. Questions are asked inline with a picker.
-Fails when no job exists.`,
+With no job to resume (none yet, or the last one is done) it continues with what comes next: a job from your
+finished discovery, or the discovery itself, exactly as \`slate start\`.`,
   async (argv, out) => {
     const { flags } = parseArgs(["continue", ...argv])
-    const p = await requireJob()
+    const p = await requireProject()
     const pid = await isEngineAlive(p.paths)
     if (pid) return attach(p.paths, pid, out)
     const store = await StateStore.open(p.paths.state)
-    if (!store) throw new CliError("no job exists", "run `slate start`")
+    const nextStep = async () => {
+      // Nothing to resume: carry on with the next thing, which is what `slate start` does. Starting a
+      // job spends money, so only from a terminal or with an explicit --yes, never implicitly.
+      if ((!process.stdin.isTTY || out.json) && !bool(flags, "yes", "y")) {
+        throw new CliError("no job to resume", "run `slate start`, or `slate continue` in a terminal (or with --yes) to start one from your discovery")
+      }
+      const passthrough = ["yes", "y", "detach", "quiet", "q"].filter((f) => bool(flags, f)).map((f) => (f.length === 1 ? `-${f}` : `--${f}`))
+      return runCommand("start", passthrough, out)
+    }
+    if (!store) return nextStep()
     const st = store.get()
     if (st.status === "done") {
-      out.emit(() => [`job ${st.job.id} is already done`, ...summary(st)], { job: st.job, status: st.status })
+      const record = await readDiscovery(p.paths)
+      if (!record.job && (await checkDiscovery(p.paths)).done) return nextStep()
+      out.emit(() => [`job ${st.job.id} is already done`, ...summary(st), "next: `slate discover` to describe the next thing to build"], { job: st.job, status: st.status })
       return 0
     }
-    const unattended = bool(flags, "yes", "y") || st.job.autonomy === "unattended"
+    // --yes / --autonomy change the job's autonomy for good, not just this run.
+    const chosen = bool(flags, "yes", "y") ? "unattended" : str(flags, "autonomy")
+    if (chosen && !AUTONOMY.some((a) => a.value === chosen)) throw new CliError(`--autonomy must be supervised, strict or unattended, not '${chosen}'`)
+    if (chosen && chosen !== st.job.autonomy) {
+      await store.update((s) => {
+        s.job.autonomy = chosen as Autonomy
+      })
+      out.line(`${st.job.id} is now ${chosen}`)
+    }
+    const unattended = store.get().job.autonomy === "unattended"
     const opts: RunOptions = { dryRun: st.job.runtime === "fake", autoApprove: unattended, quiet: bool(flags, "quiet", "q") }
     if (unattended && !bool(flags, "detach") && process.stdin.isTTY && !out.json) {
       // An unattended job keeps running in the background; this terminal only watches it.

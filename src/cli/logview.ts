@@ -22,7 +22,7 @@ export class LogView {
   /** Step key -> the agent running it and its tag. */
   private steps = new Map<string, { agent?: string; tag?: string }>()
   /** Permission questions not answered yet, shown as one line once answered. */
-  private pendingPermissions = new Map<string, { key?: string; agent?: string; what: string; at: string }>()
+  private pendingPermissions = new Map<string, { key?: string; agent?: string; what: string; at: string; batches: number }>()
   private lastAction = new Map<string, string>()
   /** "build/story-loop[0]" -> "s1": what each over-loop iteration is working on. */
   private iterations = new Map<string, string>()
@@ -37,9 +37,10 @@ export class LogView {
       const lines = this.event(r.at, r.event)
       if (!only || only.has(r)) out.push(...lines)
     }
-    // Permissions answered in the same batch (auto-approved) were folded into one line; the rest wait on a person.
+    // A permission still open one batch after it was asked really waits on a person (auto-approved
+    // ones are answered within moments and never print).
     for (const [id, p] of this.pendingPermissions) {
-      if (p.at === "shown") continue
+      if (p.at === "shown" || p.batches++ < 1) continue
       out.push(this.line(p.at, p.key ? this.actor(p.key) : (p.agent ?? "slate"), `waiting on you: permission ${p.what} [${id}]`, this.tag(p.key)))
       p.at = "shown"
     }
@@ -56,7 +57,8 @@ export class LogView {
     }
     const out: string[] = []
     for (const s of Object.values(sessions)) {
-      if (s.done || QUIET_ACTIONS.has(s.action) || this.lastAction.get(s.sessionID) === s.action) continue
+      // A permission wait shows in the audit log only if it really waits on someone.
+      if (s.done || QUIET_ACTIONS.has(s.action) || s.action.startsWith("waiting on permission") || this.lastAction.get(s.sessionID) === s.action) continue
       this.lastAction.set(s.sessionID, s.action)
       out.push(this.line(s.since, path(s), s.action, s.log))
     }
@@ -98,7 +100,7 @@ export class LogView {
         if (e.kind === "permission" && permission) {
           // Older logs have no step key on questions; the prompt still names the agent.
           const agent = /^Agent (\S+) in /.exec(e.prompt)?.[1]
-          this.pendingPermissions.set(e.id, { key: e.key, agent, what: firstLine(permission), at })
+          this.pendingPermissions.set(e.id, { key: e.key, agent, what: firstLine(permission), at, batches: 0 })
           return []
         }
         return [this.line(at, this.actor(e.key), `asks you: ${firstLine(e.prompt)} [${e.id}]`, this.tag(e.key))]
@@ -107,6 +109,8 @@ export class LogView {
         const p = this.pendingPermissions.get(e.id)
         if (p) {
           this.pendingPermissions.delete(e.id)
+          // Allowed by the job's autonomy without asking anyone: routine, not worth a line.
+          if (e.by === "policy" && e.answer !== "reject") return []
           return [this.line(at, p.key ? this.actor(p.key) : (p.agent ?? "slate"), `permission ${p.what} → ${e.answer}`, this.tag(p.key))]
         }
         return [this.line(at, "you", `answered ${e.id}: ${e.answer}${e.message ? ` — ${e.message}` : ""}`)]

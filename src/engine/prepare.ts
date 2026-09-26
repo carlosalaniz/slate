@@ -62,8 +62,18 @@ export function resolveAgentAndSkill(engine: Engine, step: SkillStep): { agent?:
 
 /* ------------------------------------------------------------------ step */
 
-/** Step scope narrows the agent scope; never widens it. */
+/**
+ * Step scope narrows the agent scope; never widens it. The step's own `writes` stay editable either
+ * way: a task scope from tasks.yaml lists code files, not the build report the step must write.
+ */
 export async function resolveScope(engine: Engine, step: SkillStep, agent: AgentSpec, ctx: Ctx): Promise<string[]> {
+  const scope = await narrowScope(engine, step, agent, ctx)
+  if (!scope.length) return scope
+  const writes = step.writes.map((w) => resolveRuntime(w, ctx.vars)).filter((w) => !scope.includes(w))
+  return [...scope, ...writes]
+}
+
+async function narrowScope(engine: Engine, step: SkillStep, agent: AgentSpec, ctx: Ctx): Promise<string[]> {
   const vars = ctx.vars
   let globs: string[] | undefined
   if (step.scope?.from) globs = await scopeFromFile(resolveRuntime(step.scope.from, vars), ctx.directory)
@@ -104,13 +114,35 @@ export async function scopeFromFile(ref: string, directory: string): Promise<str
   return undefined
 }
 
+/** Shell commands that only look: allowed as-is, each command of a pipeline checked on its own. */
+const READ_ONLY_COMMANDS = ["cat", "head", "tail", "wc", "ls", "tree", "grep", "rg", "find", "sort", "uniq", "cut", "diff", "stat", "file", "du", "pwd", "which", "test", "echo", "git status", "git log", "git diff", "git show", "git ls-files", "git rev-parse"]
+
+/**
+ * Actions that never change anything (reading, searching, loading a skill's instructions): no agent
+ * has to ask for them, in step sessions and consults alike.
+ */
+export const READ_ONLY_RULES: PermissionRule[] = [
+  ...["read", "glob", "grep", "list", "skill"].map((action): PermissionRule => ({ action, resource: "*", effect: "allow" })),
+  ...readOnlyShellRules(),
+]
+
+function readOnlyShellRules(): PermissionRule[] {
+  const shell = (resource: string, effect: PermissionRule["effect"]): PermissionRule => ({ action: "shell", resource, effect })
+  return [
+    ...READ_ONLY_COMMANDS.flatMap((c) => [shell(c, "allow"), shell(`${c} *`, "allow")]),
+    // Last matching rule wins: the ways these commands can still change files go back to asking.
+    ...["-exec", "-execdir", "-ok", "-delete", "-fprint"].map((flag) => shell(`find * ${flag}*`, "ask")),
+    shell("*>*", "ask"),
+    shell("* 2>/dev/null", "allow"),
+    shell("* 2>&1", "allow"),
+    shell("* >*", "ask"),
+    shell("*&>*", "ask"),
+  ]
+}
+
 export function permissionRules(agent: AgentSpec, scope: string[], step: SkillStep): PermissionRule[] {
   // Broad rules first, specific rules last: OpenCode evaluates the ruleset with the last matching rule winning.
-  // Reading and searching never change anything, so no agent has to ask for them.
-  const rules: PermissionRule[] = [
-    ...["read", "glob", "grep", "list"].map((action): PermissionRule => ({ action, resource: "*", effect: "allow" })),
-    { action: "subagent", resource: "*", effect: "deny" },
-  ]
+  const rules: PermissionRule[] = [...READ_ONLY_RULES, { action: "subagent", resource: "*", effect: "deny" }]
   rules.push({ action: "consult", resource: "*", effect: step.consult ? "allow" : "deny" })
   if (agent.role === "consultant") rules.push({ action: "edit", resource: "*", effect: "deny" }, { action: "shell", resource: "*", effect: "deny" })
   if (scope.length) {

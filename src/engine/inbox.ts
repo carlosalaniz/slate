@@ -27,7 +27,7 @@ export interface OpenQuestionInput {
   reviewerNotes?: string[]
   /** Answer given without asking when auto-approve is on, or always when `autoBy` is set. */
   autoAnswer?: string
-  autoBy?: "human" | "decision-agent" | "timeout"
+  autoBy?: "human" | "decision-agent" | "timeout" | "policy"
   autoMessage?: string
   freeText?: boolean
 }
@@ -43,7 +43,8 @@ export async function openQuestion(engine: Engine, input: OpenQuestionInput): Pr
   engine.o.audit.append({ type: "question.open", id: q.id, kind: q.kind, branch: q.branch, prompt: q.prompt, key: q.stepKey })
   if (autoAnswer !== undefined && (engine.o.autoApprove || autoBy)) {
     engine.log(`? ${q.prompt}\n  -> ${autoAnswer} (${autoBy ?? "auto-approve"})`)
-    await answerQuestion(engine, q.id, autoAnswer, autoMessage, autoBy ?? "human")
+    // Auto-approve (unattended) is a policy answer, not the person's.
+    await answerQuestion(engine, q.id, autoAnswer, autoMessage, autoBy ?? "policy")
   } else {
     engine.log(`? [${q.id}] ${q.prompt}\n  options: ${q.options.map((o) => o.id).join(" | ")}  (answer with: slate inbox)`)
     engine.o.onQuestion?.(q)
@@ -94,7 +95,7 @@ export async function answerQuestion(engine: Engine, id: string, answer: string,
     const qq = s.questions.find((x) => x.id === id)
     if (qq) qq.answered = { at: nowIso(), answer, message, by }
   })
-  engine.o.audit.append({ type: "question.answered", id, answer, message })
+  engine.o.audit.append({ type: "question.answered", id, answer, message, by })
   if (q.kind === "permission" || q.kind === "form") {
     const decision = answer === "reject" || answer === "deny" ? "reject" : answer === "always" ? "always" : "once"
     await engine.o.runtime.reply({ sessionID: q.sessionID!, requestID: q.requestID!, kind: q.kind, decision, message, answer: q.kind === "form" ? { answer } : undefined })
@@ -119,6 +120,8 @@ export async function pollAnswers(engine: Engine): Promise<void> {
 
 /** An agent's permission ask or form becomes a question on the step's branch. */
 export async function relayRuntimeQuestion(engine: Engine, rq: RuntimeQuestion, ctx: Ctx, step: SkillStep, key: string): Promise<void> {
+  // Supervised: routine permissions go through by themselves; only `autonomy.ask_before` reaches you.
+  const routine = rq.kind === "permission" && engine.o.autonomy === "supervised" && !asksBefore(engine.o.project.autonomy.ask_before, rq.action ?? "", rq.resources ?? [])
   const q = await openQuestion(engine, {
     kind: rq.kind,
     prompt: rq.kind === "permission" ? `Agent ${step.by} in ${step.id} asks permission: ${rq.action} ${(rq.resources ?? []).join(" ")}${rq.message ? ` — ${rq.message}` : ""}` : `Agent ${step.by} in ${step.id} asks: ${rq.title ?? rq.message ?? "(form)"}`,
@@ -132,7 +135,8 @@ export async function relayRuntimeQuestion(engine: Engine, rq: RuntimeQuestion, 
     requestID: rq.requestID,
     reviewerNotes: rq.reviewerNotes,
     freeText: rq.kind === "form",
-    autoAnswer: engine.o.autoApprove && rq.kind === "permission" ? "once" : undefined,
+    autoAnswer: rq.kind === "permission" && (engine.o.autoApprove || routine) ? "once" : undefined,
+    autoBy: routine && !engine.o.autoApprove ? "policy" : undefined,
   })
   void waitForAnswer(engine, q.id).catch(() => undefined)
 }
@@ -143,4 +147,15 @@ export function syncJobStatus(s: JobState): void {
   const waiting = s.questions.some((q) => !q.answered)
   const working = Object.values(s.branches).some((b) => b.status === "running")
   s.status = waiting && !working ? "blocked" : "running"
+}
+
+/** Whether a permission request matches one of the "<action> <pattern>" entries. */
+export function asksBefore(patterns: string[], action: string, resources: string[]): boolean {
+  const glob = (p: string) => new RegExp("^" + p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "s")
+  return patterns.some((entry) => {
+    const [a, ...rest] = entry.trim().split(/\s+/)
+    const pattern = rest.join(" ") || "*"
+    if (a !== "*" && a !== action) return false
+    return (resources.length ? resources : [""]).some((r) => glob(pattern).test(r.trim()))
+  })
 }

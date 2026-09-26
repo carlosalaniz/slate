@@ -86,6 +86,13 @@ export interface RunStepRequest {
   signal?: AbortSignal
 }
 
+/**
+ * How much a job asks you: `strict` asks about every permission; `supervised` asks only about
+ * decisions (approvals, questions, gates) and the permissions in `autonomy.ask_before`; `unattended`
+ * takes the default everywhere and runs in the background.
+ */
+export type Autonomy = "strict" | "supervised" | "unattended"
+
 export interface RuntimeQuestion {
   kind: "permission" | "form"
   sessionID: string
@@ -174,7 +181,7 @@ export type AuditEvent =
   | { type: "loop.iteration"; key: string; loop: string; iteration: number; value: string }
   | { type: "loop.exhausted"; key: string; loop: string; policy: string }
   | { type: "question.open"; id: string; kind: string; branch: string; prompt: string; key?: string }
-  | { type: "question.answered"; id: string; answer: string; message?: string }
+  | { type: "question.answered"; id: string; answer: string; message?: string; by?: "human" | "decision-agent" | "timeout" | "policy" }
   | { type: "budget"; scope: string; spent: number; cap: number }
   | { type: "job"; status: string; phase?: Phase; reason?: string }
   | { type: "script"; key: string; script: string; ok: boolean; output?: string; error?: string }
@@ -262,7 +269,7 @@ export interface Question {
   step?: string
   story?: string
   created: string
-  answered?: { at: string; answer: string; message?: string; by: "human" | "decision-agent" | "timeout" }
+  answered?: { at: string; answer: string; message?: string; by: "human" | "decision-agent" | "timeout" | "policy" }
   sessionID?: string
   requestID?: string
   reviewerNotes?: string[]
@@ -300,8 +307,8 @@ export interface JobState {
     opencode: string
     runtime: "opencode" | "fake"
     idea?: string
-    /** Chosen at `slate start`; unattended answers every question that has a default. */
-    autonomy?: "supervised" | "unattended"
+    /** Chosen at `slate start`; see Autonomy. */
+    autonomy?: Autonomy
   }
   phase: Phase
   status: JobStatus
