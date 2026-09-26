@@ -340,16 +340,8 @@ export class OpenCodeRuntime implements Runtime {
       if (strategy === "none") return { directory: req.sourceDirectory }
       if (await isDir(dir)) return { directory: dir }
       if (strategy === "git" && (await isDir(path.join(req.sourceDirectory, ".git")))) {
-        try {
-          const loc = await this.oc.location.get({ location: { directory: req.sourceDirectory } })
-          const projectID = loc?.project?.id
-          if (projectID) {
-            const wt = await this.oc.worktree.create({ projectID, name: req.name, directory: dir })
-            if (wt?.directory) return { directory: wt.directory }
-          }
-        } catch (e) {
-          this.log(`[worktree] sdk create failed, falling back to git: ${(e as Error).message.split("\n")[0]}`)
-        }
+        // Plain git, not OpenCode's worktree API: that one nests the checkout one level down
+        // (<dir>/<name>) on a detached HEAD, so there is no `slate/<name>` branch to merge.
         const branch = `slate/${req.name}`
         const proc = Bun.spawn(["git", "worktree", "add", "-B", branch, dir], { cwd: req.sourceDirectory, stdout: "pipe", stderr: "pipe" })
         const code = await proc.exited

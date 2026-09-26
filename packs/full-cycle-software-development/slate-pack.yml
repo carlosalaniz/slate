@@ -17,6 +17,7 @@ config:
   max_designs: 2
   max_stories: 50
   max_tasks_per_story: 20
+  # Tasks edit the project in place and commit to the current branch, so stories run one at a time.
   story_concurrency: 1
 
 # Live discovery: after the person picks this pack, discovery-lead takes over the conversation and
@@ -85,6 +86,8 @@ phases:
               over: { script: next-task, args: ["{story}"] }
               as: task
               max: "${max_tasks_per_story}"
+              # In place: builder and checker work in the project itself; each verified task is a commit.
+              worktree: false
               steps:
                 # Task files live in tasks/<task>/design-<n>/, so a redesign starts clean and keeps history.
                 - id: build-verify
@@ -115,6 +118,7 @@ phases:
                       by: checker
                       writes: ["tasks/{task}/design-{round.design}/verdict-{round}.md"]
                       result: { file: "tasks/{task}/design-{round.design}/verdict-{round}.md", field: verdict }
+                - { id: commit, type: script, script: commit-task, args: ["{story}", "{task}"] }
         - id: merge
           type: skill
           skill: merge-story

@@ -2,7 +2,7 @@ description: Implements one task at a time with tests, inside the task's file sc
 role: worker
 model: low
 scope: { modify: ["src/**", "tests/**", "tasks/**"] }
-# Builds and runs tests in its worktree, so shell commands run without asking.
+# Builds and runs tests in the project, so shell commands run without asking.
 permissions:
   - { action: shell, resource: "*", effect: allow }
 prompt: |

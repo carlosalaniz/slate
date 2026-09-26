@@ -1,7 +1,8 @@
-description: Merge the story's task branches, run all tests, record the merge.
+description: Close the story on the current branch, run all tests, record it.
 reads: ["stories/{story}/tasks.yaml", "specs/tech-spec.md", "CHANGELOG.md"]
 prompt: |
-  Merge story {story}. Task branches are named `slate/<task-id>` (worktrees under `.slate/worktrees/`).
-  For each task in tasks.yaml, `git merge --no-ff slate/<task-id>`; resolve conflicts conservatively.
-  Run the full test command. Update `CHANGELOG.md`. Write `stories/{story}/merged.md` with the merged
-  commits, test result and anything left undone. Do not push.
+  Close story {story}. Its tasks were built in place and each verified task is already a commit on
+  the current branch (`git log --oneline` shows "<task-id>: <title>"). Run the full test command and
+  fix nothing yourself: report failures. Update `CHANGELOG.md`. Write `stories/{story}/merged.md`
+  with the story's commits, the test result and anything left undone, then commit those two files as
+  "{story}: done". Do not push and do not rewrite history.

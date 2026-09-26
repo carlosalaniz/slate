@@ -8,7 +8,7 @@ prompt: |
       title: ...
       description: ...
       acceptance: [ ... ]   # verifiable statements
-      depends_on: []        # ids of stories that must be merged first
+      depends_on: []        # ids of stories that must be finished first
   ```
   First story must set up the project skeleton and test runner. Keep stories small enough for one
   builder to finish in a few tasks.

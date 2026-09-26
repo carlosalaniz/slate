@@ -1,0 +1,3 @@
+description: Commits a verified task's changes to the current branch (tasks edit the project in place).
+run: "bun $SLATE_PACK/scripts/scripts/commit-task.ts"
+timeout: 60s

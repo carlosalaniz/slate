@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import { existsSync } from "node:fs"
-import { harness, referencePackDir } from "./helpers.ts"
+import { harness, referencePackDir, tmpProject } from "./helpers.ts"
 
 describe("reference pack end to end (fake runtime)", () => {
   test("runs discovery, plan, build (2 stories x 2 tasks) and close", async () => {
@@ -18,9 +18,9 @@ describe("reference pack end to end (fake runtime)", () => {
     // stories ran in dependency order
     const stories = st.loops["build/story-loop"]!.iterations!.map((i) => i.value)
     expect(stories).toEqual(["s1", "s2"])
-    // tasks ran in worktrees
+    // tasks ran in place, in the project itself (no worktrees)
     const build = h.runtime.calls.find((c) => c.step === "build")!
-    expect(build.directory).toContain(".slate/worktrees/")
+    expect(build.directory).toBe(h.root)
     expect(st.steps["plan/planning{1}/approve-plan"]!.status).toBe("passed")
     expect(st.spend.byStory["s1"]).toBeGreaterThan(0)
     // every story was designed once: nothing needed a redesign
@@ -69,10 +69,35 @@ describe("reference pack end to end (fake runtime)", () => {
     expect(redesign.prompt).toContain("This is design round 2")
     // the new design rebuilds every task, including s1-t1 which passed under the first design
     expect(st.loops[`${design}{2}/task-loop`]!.iterations!.map((i) => `${i.value}:${i.status}`)).toEqual(["s1-t1:done", "s1-t2:done"])
-    const worktree = (task: string) => path.join(h.root, ".slate", "worktrees", task, "tasks", task)
-    expect(existsSync(path.join(worktree("s1-t1"), "design-1", "verdict-1.md"))).toBe(true)
-    expect(existsSync(path.join(worktree("s1-t1"), "design-2", "verdict-1.md"))).toBe(true)
+    const taskDir = (task: string) => path.join(h.root, "tasks", task)
+    expect(existsSync(path.join(taskDir("s1-t1"), "design-1", "verdict-1.md"))).toBe(true)
+    expect(existsSync(path.join(taskDir("s1-t1"), "design-2", "verdict-1.md"))).toBe(true)
     expect(existsSync(path.join(h.root, "stories/s1/merged.md"))).toBe(true)
     expect(existsSync(path.join(h.root, "stories/s2/merged.md"))).toBe(true)
   }, 120_000)
+})
+
+describe("commit-task", () => {
+  const script = path.join(referencePackDir(), "scripts/scripts/commit-task.ts")
+  const run = (root: string) => {
+    const r = Bun.spawnSync([process.execPath, script, "s1", "s1-t1"], { env: { ...process.env, SLATE_WORKSPACE: root } })
+    return { code: r.exitCode, answer: JSON.parse(r.stdout.toString() || "{}") }
+  }
+  const git = (root: string, ...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe" }).stdout.toString().trim()
+
+  test("commits a task's changes as '<task>: <title>', once", async () => {
+    const root = await tmpProject()
+    git(root, "init", "-q")
+    git(root, "config", "user.email", "t@t")
+    git(root, "config", "user.name", "t")
+    await Bun.write(path.join(root, "stories/s1/tasks.yaml"), "tasks:\n  - id: s1-t1\n    title: Counter component\n")
+    await Bun.write(path.join(root, "src/counter.ts"), "export const n = 1\n")
+    expect(run(root)).toMatchObject({ code: 0, answer: { ok: true, committed: true } })
+    expect(git(root, "log", "--format=%s")).toBe("s1-t1: Counter component")
+    expect(run(root)).toMatchObject({ code: 0, answer: { ok: true, committed: false, note: "nothing changed" } })
+  })
+
+  test("outside git there is nothing to do", async () => {
+    expect(run(await tmpProject())).toMatchObject({ code: 0, answer: { ok: true, committed: false, note: "not a git repository" } })
+  })
 })

@@ -6,6 +6,6 @@ prompt: |
   implementation notes. If a review file exists for this story, address every request in it.
 
   This is design round {round.design}. Above 1, tasks failed in build under the previous design:
-  read the verdicts from the previous design, `tasks/<task>/design-<previous round>/verdict-*.md`
-  (for unmerged tasks, under `.slate/worktrees/<task>/`), and change the design so those failures
-  cannot recur. Every task is built again under the new design.
+  read the verdicts from the previous design, `tasks/<task>/design-<previous round>/verdict-*.md`,
+  and `git log` for the tasks already committed, and change the design so those failures cannot
+  recur. Every task is built again under the new design.
