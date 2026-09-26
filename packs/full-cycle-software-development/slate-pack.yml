@@ -24,10 +24,24 @@ config:
   # Stories whose dependencies are merged build side by side, each in its own git worktree.
   # Without git they run one at a time in the project itself.
   story_concurrency: 2
+  # Visual review of every story with screens once it lands: screenshots at these viewports, the UX
+  # designer's review, and a fix story for what must change. Passes per story: the story, then each
+  # fix story, up to this many reviews. 0 turns it off.
+  ux_passes: 2
+  ux_concurrency: 1
+  ux_viewports: "320x568,390x844,768x1024"
+  ux_max_screens: 6
+  ux_min_target: 44
+  max_ux_reviews: 100
+  # Stand-ins builders declared that are still in the product at the end: halt | report
+  placeholders: halt
 
 # Live discovery: after the person picks this pack, discovery-lead takes over the conversation and
 # has each specialist draft its document (product scope, UI/UX spec, tech spec) with their answers.
 discovery: { lead: discovery-lead }
+# What the product takes beyond code (sound, images, ...), each mapped to an installed skill by the
+# architect in discovery. A need nothing covers halts the job before planning.
+needs: specs/capabilities.yaml
 
 phases:
   discovery:
@@ -36,7 +50,7 @@ phases:
     - { id: uiux-spec, type: skill, skill: gather-uiux-spec, by: uiux-designer,
         writes: ["specs/uiux-spec.md"], consult: { agents: [staff-engineer], max: 2 } }
     - { id: tech-spec, type: skill, skill: gather-tech-spec, by: architect,
-        writes: ["specs/tech-spec.md"], consult: { agents: [product-owner-consultant], max: 2 } }
+        writes: ["specs/tech-spec.md", "specs/capabilities.yaml"], consult: { agents: [product-owner-consultant], max: 2 } }
 
   plan:
     # One plan round: write the stories and their graph, check the graph, ask for approval.
@@ -59,106 +73,128 @@ phases:
   build:
     # Story worktrees only see committed files, so the specs and the plan are committed first.
     - { id: commit-plan, type: script, script: commit-docs, args: ["plan: specs and stories"] }
-    - id: story-loop
-      type: loop
-      over: { script: next-ready-story }
-      as: story
-      max: "${max_stories}"
-      concurrency: "${story_concurrency}"
-      # Each story builds on branch slate/<story> in .slate/worktrees/<story> and lands when it closes.
-      worktree: git
+    # Two lanes side by side. Stories build and land; every story that lands with screens gets a UX
+    # review in the other lane (screenshots -> UX designer -> a fix story when something must change),
+    # which the story lane then builds. Reviews never hold up a story; the build ends when neither
+    # lane has work left.
+    - id: build-lanes
+      type: parallel
       steps:
-        - { id: setup, type: script, script: setup-story }
-        # One design round: write and review the TDD, split it into tasks, build every task.
-        # A task that runs out of build rounds fails the round, and the next round redesigns.
-        - id: design
+        - id: story-loop
           type: loop
-          until: all-pass
-          max: "${max_designs}"
-          on_exhausted: "${on_exhausted}"
+          over: { script: next-ready-story }
+          as: story
+          max: "${max_stories}"
+          concurrency: "${story_concurrency}"
+          # Each story builds on branch slate/<story> in .slate/worktrees/<story> and lands when it closes.
+          worktree: git
           steps:
-            - id: tdd
-              type: loop
-              until: { result: review-tdd }
-              max: "${max_tdd_rounds}"
-              on_exhausted: "${on_exhausted}"
-              steps:
-                - { id: write-tdd, type: skill, skill: edit-tdd, by: architect,
-                    writes: ["stories/{story}/TDD.md"], consult: { agents: [product-owner-consultant], max: 2 } }
-                - { id: review-tdd, type: skill, skill: review-tdd, by: reviewer,
-                    writes: ["stories/{story}/review-{round}.md"],
-                    result: { file: "stories/{story}/review-{round}.md", field: verdict } }
-            # A split the scope check rejects is redone on its own (the check writes its problems to
-            # stories/{story}/scope-check.md); only a split that keeps failing sends the story back to design.
-            - id: split
+            - { id: setup, type: script, script: setup-story }
+            # One design round: write and review the TDD, split it into tasks, build every task.
+            # A task that runs out of build rounds fails the round, and the next round redesigns.
+            - id: design
               type: loop
               until: all-pass
-              max: "${max_split_rounds}"
-              on_exhausted: fail
+              max: "${max_designs}"
+              on_exhausted: "${on_exhausted}"
               steps:
-                - { id: split-tdd, type: skill, skill: split-tdd-into-tasks, by: architect,
-                    writes: ["stories/{story}/tasks.yaml"] }
-                - { id: check-scopes, type: script, script: check-task-scopes, args: ["{story}"] }
-            - id: task-loop
-              type: loop
-              over: { script: next-task, args: ["{story}"] }
-              as: task
-              max: "${max_tasks_per_story}"
-              # In place: builder and checker work in the story's checkout; each verified task is a commit.
-              worktree: false
-              steps:
-                # Task files live in tasks/<task>/design-<n>/, so a redesign starts clean and keeps history.
-                - id: build-verify
+                - id: tdd
                   type: loop
-                  until: { result: verify }
-                  max: "${max_build_rounds}"
+                  until: { result: review-tdd }
+                  max: "${max_tdd_rounds}"
+                  on_exhausted: "${on_exhausted}"
+                  steps:
+                    - { id: write-tdd, type: skill, skill: edit-tdd, by: architect,
+                        writes: ["stories/{story}/TDD.md"], consult: { agents: [product-owner-consultant], max: 2 } }
+                    - { id: review-tdd, type: skill, skill: review-tdd, by: reviewer,
+                        writes: ["stories/{story}/review-{round}.md"],
+                        result: { file: "stories/{story}/review-{round}.md", field: verdict } }
+                # A split the scope check rejects is redone on its own (the check writes its problems to
+                # stories/{story}/scope-check.md); only a split that keeps failing sends the story back to design.
+                - id: split
+                  type: loop
+                  until: all-pass
+                  max: "${max_split_rounds}"
                   on_exhausted: fail
                   steps:
-                    - id: build
-                      type: skill
-                      skill: work-on-task
-                      by: builder
-                      consult: { agents: [architect], max: 2, steps: 6 }
-                      gates:
-                        - on: { action: shell, resource: "npm install*" }
-                          review: [architect]
-                          inputs: ["specs/tech-spec.md"]
-                          else: ask-human
-                        - on: { action: shell, resource: "pip install*" }
-                          review: [architect]
-                          inputs: ["specs/tech-spec.md"]
-                          else: ask-human
-                      writes: ["tasks/{task}/design-{round.design}/build-{round}.md"]
-                    # The tests run as a script: a failure goes back to the builder without a checker session.
-                    - { id: tests, type: script, script: run-tests, args: ["{task}", "{round.design}", "{round}"] }
-                    - id: verify
-                      type: skill
-                      skill: verify-task
-                      by: checker
-                      writes: ["tasks/{task}/design-{round.design}/verdict-{round}.md"]
-                      result: { file: "tasks/{task}/design-{round.design}/verdict-{round}.md", field: verdict }
-                - { id: commit, type: script, script: commit-task, args: ["{story}", "{task}"] }
-        # One close round: merge in what other stories landed (conflicts stay for the integrator),
-        # close the story, land it. Another story landing first fails the round, and the next merges again.
-        - id: close
+                    - { id: split-tdd, type: skill, skill: split-tdd-into-tasks, by: architect,
+                        writes: ["stories/{story}/tasks.yaml"] }
+                    - { id: check-scopes, type: script, script: check-task-scopes, args: ["{story}"] }
+                - id: task-loop
+                  type: loop
+                  over: { script: next-task, args: ["{story}"] }
+                  as: task
+                  max: "${max_tasks_per_story}"
+                  # In place: builder and checker work in the story's checkout; each verified task is a commit.
+                  worktree: false
+                  steps:
+                    # Task files live in tasks/<task>/design-<n>/, so a redesign starts clean and keeps history.
+                    - id: build-verify
+                      type: loop
+                      until: { result: verify }
+                      max: "${max_build_rounds}"
+                      on_exhausted: fail
+                      steps:
+                        - id: build
+                          type: skill
+                          skill: work-on-task
+                          by: builder
+                          consult: { agents: [architect], max: 2, steps: 6 }
+                          gates:
+                            - on: { action: shell, resource: "npm install*" }
+                              review: [architect]
+                              inputs: ["specs/tech-spec.md"]
+                              else: ask-human
+                            - on: { action: shell, resource: "pip install*" }
+                              review: [architect]
+                              inputs: ["specs/tech-spec.md"]
+                              else: ask-human
+                          writes: ["tasks/{task}/design-{round.design}/build-{round}.md"]
+                        # The tests run as a script: a failure goes back to the builder without a checker session.
+                        - { id: tests, type: script, script: run-tests, args: ["{task}", "{round.design}", "{round}"] }
+                        - id: verify
+                          type: skill
+                          skill: verify-task
+                          by: checker
+                          writes: ["tasks/{task}/design-{round.design}/verdict-{round}.md"]
+                          result: { file: "tasks/{task}/design-{round.design}/verdict-{round}.md", field: verdict }
+                    - { id: commit, type: script, script: commit-task, args: ["{story}", "{task}"] }
+            # One close round: merge in what other stories landed (conflicts stay for the integrator),
+            # close the story, land it. Another story landing first fails the round, and the next merges again.
+            - id: close
+              type: loop
+              until: all-pass
+              max: "${max_close_rounds}"
+              on_exhausted: "${on_exhausted}"
+              steps:
+                - { id: sync, type: script, script: sync-story }
+                - id: merge
+                  type: skill
+                  skill: merge-story
+                  by: integrator
+                  writes: ["stories/{story}/merged.md"]
+                  gates:
+                    - { on: { action: shell, resource: "git push*" }, review: [], else: ask-human }
+                    - { on: { action: shell, resource: "git reset --hard*" }, review: [], else: ask-human }
+                    - { on: { action: shell, resource: "git branch -D*" }, review: [], else: ask-human }
+                - { id: land, type: script, script: land-story, args: ["{story}"] }
+        - id: ux-review-loop
           type: loop
-          until: all-pass
-          max: "${max_close_rounds}"
-          on_exhausted: "${on_exhausted}"
+          over: { script: next-ux-review, args: ["${ux_passes}"] }
+          as: review
+          max: "${max_ux_reviews}"
+          concurrency: "${ux_concurrency}"
+          # In the project itself: the screenshots come from a throwaway checkout of what has landed.
+          worktree: false
           steps:
-            - { id: sync, type: script, script: sync-story }
-            - id: merge
-              type: skill
-              skill: merge-story
-              by: integrator
-              writes: ["stories/{story}/merged.md"]
-              gates:
-                - { on: { action: shell, resource: "git push*" }, review: [], else: ask-human }
-                - { on: { action: shell, resource: "git reset --hard*" }, review: [], else: ask-human }
-                - { on: { action: shell, resource: "git branch -D*" }, review: [], else: ask-human }
-            - { id: land, type: script, script: land-story, args: ["{story}"] }
+            - { id: screenshots, type: script, script: ux-screenshots, args: ["{review}", "${ux_viewports}", "${ux_max_screens}", "${ux_min_target}"] }
+            - { id: ux-review, type: skill, skill: review-screens, by: uiux-designer, model: medium,
+                writes: ["stories/{review}/ux-review.yaml"] }
+            - { id: file-ux-fixes, type: script, script: file-ux-fixes, args: ["{review}"] }
 
   close:
+    # Stand-ins still in the product halt the job here, before the summary could call them done.
+    - { id: placeholders, type: script, script: check-placeholders, args: ["${placeholders}"] }
     # The changelog is written once here: stories built side by side would all conflict on it.
     - { id: summarize, type: skill, skill: summarize-run, by: analyst, writes: ["RUN-SUMMARY.md", "CHANGELOG.md"] }
     - { id: commit-summary, type: script, script: commit-docs, args: ["run summary and changelog"] }

@@ -1,0 +1,3 @@
+description: Halts before the run summary while stand-ins builders declared (silent audio, lorem text...) are still in the product.
+run: "bun $SLATE_PACK/scripts/scripts/check-placeholders.ts"
+timeout: 60s

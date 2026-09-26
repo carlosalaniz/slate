@@ -81,5 +81,5 @@ export async function checkPlanRevision(engine: Engine, ctx: Ctx): Promise<void>
 
 /** Skill steps in order, including those inside loops (the plan phase may wrap them in a loop). */
 function skillSteps(steps: Step[]): SkillStep[] {
-  return steps.flatMap((s) => (s.type === "skill" ? [s] : s.type === "loop" ? skillSteps(s.steps) : []))
+  return steps.flatMap((s) => (s.type === "skill" ? [s] : s.type === "loop" || s.type === "parallel" ? skillSteps(s.steps) : []))
 }

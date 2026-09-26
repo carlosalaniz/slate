@@ -10,7 +10,7 @@ import { createJob, runForeground, buildEngine } from "../src/cli/commands/run-j
 import { Output } from "../src/cli/output.ts"
 import { tmpProject, testConfig } from "./helpers.ts"
 
-const SPECS = ["specs/product-scope.md", "specs/uiux-spec.md", "specs/tech-spec.md"]
+const SPECS = ["specs/product-scope.md", "specs/uiux-spec.md", "specs/tech-spec.md", "specs/capabilities.yaml"]
 const brief = (pack?: string) => `---\ntitle: Kids calculator\nkind: software\n${pack ? `pack: ${pack}\n` : ""}---\n# Goal\nA whimsical calculator game.\n`
 
 async function write(root: string, files: Record<string, string>): Promise<void> {
@@ -38,7 +38,7 @@ describe("discovery", () => {
     expect((await checkDiscovery(paths)).missing[0]).toContain("no-such-pack")
     await write(root, { ".slate/brief.md": brief("full-cycle-software-development"), "specs/product-scope.md": "x" })
     expect(await checkDiscovery(paths)).toMatchObject({ done: false, missing: SPECS.slice(1) })
-    await write(root, { "specs/uiux-spec.md": "x", "specs/tech-spec.md": "x" })
+    await write(root, { "specs/uiux-spec.md": "x", "specs/tech-spec.md": "x", "specs/capabilities.yaml": "needs: []" })
     const done = await checkDiscovery(paths)
     expect(done.done).toBe(true)
     expect(done.pack!.name).toBe("full-cycle-software-development")
@@ -90,7 +90,7 @@ describe("discovery agents and placeholders", () => {
     const pack = (await findPack("full-cycle-software-development"))!
     const { lead, docs } = await writePackAgents(paths, config, await loadCorePack(), pack)
     expect(lead).toBe("slate-full-cycle-software-development")
-    expect(docs.map((d) => [d.file, d.subagent])).toEqual([["specs/product-scope.md", "slate-analyst"], ["specs/uiux-spec.md", "slate-uiux-designer"], ["specs/tech-spec.md", "slate-architect"]])
+    expect(docs.map((d) => [d.file, d.subagent])).toEqual([["specs/product-scope.md", "slate-analyst"], ["specs/uiux-spec.md", "slate-uiux-designer"], ["specs/tech-spec.md", "slate-architect"], ["specs/capabilities.yaml", "slate-architect"]])
 
     const packLead = await frontOf(path.join(root, `.opencode/agents/${lead}.md`))
     expect(packLead.data).toMatchObject({ mode: "primary", model: "openrouter/a/high" })
@@ -114,7 +114,7 @@ describe("discovery agents and placeholders", () => {
     await scaffoldDocs(paths, docs, core)
     expect(await Bun.file(path.join(root, "specs/product-scope.md")).text()).toContain("slate-analyst")
     expect(await Bun.file(path.join(root, "specs/tech-spec.md")).text()).toBe("already written\n")
-    expect(await checkDiscovery(paths)).toMatchObject({ done: false, missing: SPECS.slice(0, 2) })
+    expect(await checkDiscovery(paths)).toMatchObject({ done: false, missing: [...SPECS.slice(0, 2), SPECS[3]] })
   })
 })
 

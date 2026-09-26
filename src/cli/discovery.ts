@@ -3,6 +3,7 @@ import YAML from "yaml"
 import type { ProjectConfig } from "../config/project.ts"
 import type { ProjectPaths } from "../config/paths.ts"
 import type { AgentSpec, Step } from "../pack/schema.ts"
+import { writeCatalog } from "../engine/capabilities.ts"
 import { loadPack } from "../pack/loader.ts"
 import { listInstalledPacks, findPack, type InstalledPack } from "../pack/registry.ts"
 import { loadCorePack, renderPrompt } from "../engine/core-pack.ts"
@@ -77,7 +78,7 @@ export async function discoveryDocs(pack: InstalledPack): Promise<DiscoveryDoc[]
   const docs: DiscoveryDoc[] = []
   const walk = (steps: Step[]) => {
     for (const s of steps) {
-      if (s.type === "loop") walk(s.steps)
+      if (s.type === "loop" || s.type === "parallel") walk(s.steps)
       else if (s.type === "skill" && s.writes?.length) {
         const skill = loaded.skills[s.skill]
         const agent = loaded.agents[s.by]
@@ -254,6 +255,8 @@ export async function writeCoreLead(paths: ProjectPaths, config: ProjectConfig, 
  */
 export async function writePackAgents(paths: ProjectPaths, config: ProjectConfig, core: CorePack, pack: InstalledPack): Promise<{ lead: string; docs: NamedDoc[] }> {
   const loaded = await loadPack(pack.dir)
+  // The installed skills and tools, so the architect can map what the product needs to them.
+  await writeCatalog(paths.root, loaded, core)
   const docs: NamedDoc[] = (await discoveryDocs(pack)).map((d) => ({ ...d, subagent: `slate-${d.agent.id}` }))
   const agentsDir = path.join(paths.root, ".opencode", "agents")
   const model = (tier: "low" | "medium" | "high") => `${config.provider}/${config.models[tier]}`

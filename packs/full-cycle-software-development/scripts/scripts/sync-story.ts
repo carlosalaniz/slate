@@ -4,7 +4,7 @@
  * the merge is left in progress and the integrator resolves it next. A story running in the project
  * itself has nothing to sync.
  */
-import { workspace, root, reply, git, currentBranch, conflictedFiles } from "./lib.ts"
+import { workspace, root, reply, git, currentBranch, conflictedFiles, commitStoryReport } from "./lib.ts"
 
 if (workspace === root) reply({ ok: true, note: "runs in the project itself" })
 const base = currentBranch(root)
@@ -13,6 +13,9 @@ if (!base) reply({ ok: false, reason: "the project is not on a branch (detached 
 // An earlier round left a merge unresolved: the integrator has another go at it.
 if (git(["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) reply({ ok: true, base, conflicts: conflictedFiles() })
 
+// A report an earlier round wrote but did not commit would block every round from here on.
+const story = process.env.SLATE_VAR_STORY
+if (story) commitStoryReport(story)
 const dirty = git(["status", "--porcelain"]).out
 if (dirty) reply({ ok: false, reason: `the story's worktree has uncommitted changes, so ${base} cannot be merged in:\n${dirty.slice(0, 500)}` })
 

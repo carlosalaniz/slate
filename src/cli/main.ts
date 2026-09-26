@@ -22,6 +22,7 @@ usage: slate <command> [options]   (every command accepts --json)
   discover   Discovery in OpenCode, with you: writes the brief, picks the pack, writes the pack's discovery docs.
   start      Start a job from a finished discovery: plan, build, close. Asks supervised or unattended.
   continue   Reattach to the current job to watch or give input. Resumes it if stopped.
+  check      What the job needs (tools, model input such as images, discovery's needs), checked for free.
   status     Questions waiting on you, what is running or blocked, spend per model/task/story, contract failures.
   inbox      Walk through open questions one at a time with their context. Works without attaching.
   log        Decisions and reasoning per task: consults, verdicts, gates, retries, loop rounds. \`slate log <task>\` for one.

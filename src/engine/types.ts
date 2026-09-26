@@ -1,4 +1,4 @@
-import type { AgentSpec, SkillSpec, ScriptSpec, Manifest, PermissionRule, ConsultPolicy, Gate, Step, PackPhase } from "../pack/schema.ts"
+import type { AgentSpec, SkillSpec, ScriptSpec, CapabilitySpec, Manifest, PermissionRule, ConsultPolicy, Gate, Step, PackPhase } from "../pack/schema.ts"
 import type { ProjectConfig } from "../config/project.ts"
 
 export type Phase = "intake" | PackPhase | "done"
@@ -25,6 +25,8 @@ export interface LoadedPack {
   agents: Record<string, AgentSpec>
   skills: Record<string, SkillSpec>
   scripts: Record<string, ScriptSpec>
+  /** Tools steps can require: this pack's `capabilities/` over slate-core's. */
+  capabilities: Record<string, CapabilitySpec>
   /** Resolved config: manifest defaults overlaid with slate.config.yml `config`. */
   config: Record<string, unknown>
 }
@@ -43,6 +45,11 @@ export interface JobContext {
   activityPath: string
   /** The bundled slate-core pack: Slate's own agents, skills and prompt templates. */
   core: CorePack
+  /**
+   * MCP servers Slate registered and the ones every worker may call (tools of skills discovery
+   * mapped). Other MCP tools are allowed only to agents and skills that require them.
+   */
+  toolAccess(): { registered: string[]; shared: string[] }
 }
 
 /** slate-core is a normal pack plus `prompts/`: every text Slate itself sends a model. */
@@ -167,6 +174,21 @@ export interface Runtime {
   }
   /** Lists provider/model availability so `init` and `start` can fail early. */
   models(): Promise<{ providers: string[]; models: string[] }>
+  /** What a model accepts and produces (models.dev modalities); undefined when the runtime does not know the model. Costs nothing. */
+  modelModalities(model: ModelRef): Promise<{ input: string[]; output: string[] } | undefined>
+  /** Registers local MCP servers in every directory sessions run in, now and later. Idempotent. */
+  ensureMcp(servers: McpServerSpec[]): Promise<void>
+  /** Status of registered MCP servers once they settle (connected, failed, ...), waiting up to `timeoutMs`. A handshake, no model call. */
+  mcpStatus(names: string[], timeoutMs: number): Promise<Record<string, { status: string; error?: string }>>
+}
+
+/** A local MCP server from a capability. Its tools show up as `<name>_<tool>` permission actions. */
+export interface McpServerSpec {
+  name: string
+  command: string[]
+  environment?: Record<string, string>
+  /** Seconds it may take to start. */
+  startup: number
 }
 
 /* ---------------------------------- audit ---------------------------------- */
@@ -190,6 +212,7 @@ export type AuditEvent =
   | { type: "worktree"; key: string; action: "create" | "remove"; directory: string }
   | { type: "session"; key: string; sessionID: string; agent: string; model: string; directory: string }
   | { type: "plan.revise"; note: string }
+  | { type: "preflight"; ok: boolean; checked: string[]; waived: string[]; problems: string[] }
 
 export interface AuditRecord {
   at: string

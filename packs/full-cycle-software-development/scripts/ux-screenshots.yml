@@ -1,0 +1,4 @@
+description: Serves the landed project, screenshots a story's screens at every viewport and measures layout problems (overflowing text, overlaps, small targets).
+run: "bun $SLATE_PACK/scripts/scripts/ux-screenshots.ts"
+timeout: 10m
+requires: { tools: [playwright] }

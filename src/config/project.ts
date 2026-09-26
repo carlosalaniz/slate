@@ -61,6 +61,12 @@ export const ProjectConfigSchema = z.object({
       worktrees: z.enum(["git", "copy", "none"]).default("git"),
     })
     .default({ step_timeout_minutes: 90, infra_retries: 3, contract_reprompts: 1, worktrees: "git" }),
+  /**
+   * The escape hatch for requirements. Every tool (`playwright`), model modality (`image-input`,
+   * `audio-output`, ...) or discovery need (`audio-synthesis`) listed here is gone without: nothing
+   * checks it, and agents are told it is unavailable instead of the job halting.
+   */
+  capabilities: z.object({ waive: z.array(z.string().min(1)).default([]) }).default({ waive: [] }),
   config: z.record(z.string(), z.unknown()).default({}),
 })
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>

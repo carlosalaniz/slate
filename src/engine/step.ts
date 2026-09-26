@@ -12,6 +12,7 @@ import { composePrompt, permissionRules, resolveAgentAndSkill, resolveReads, res
 import { openQuestion, relayRuntimeQuestion, syncJobStatus, waitForAnswer } from "./inbox.ts"
 import { recordSpend } from "./spend.ts"
 import { appendRevisionNote, stopJob } from "./control.ts"
+import { allowedTools } from "./capabilities.ts"
 
 /**
  * step — the three leaf steps: skill (an agent session), script (a check that reads files),
@@ -41,7 +42,7 @@ export async function runSkill(engine: Engine, step: SkillStep, ctx: Ctx, agent:
   engine.log(`> ${key} (${agent.id}, ${modelName(model)})`)
 
   const scope = await resolveScope(engine, step, agent, ctx)
-  const permissions = permissionRules(agent, scope, step, step.writes.map((w) => resolveRuntime(w, vars)))
+  const permissions = permissionRules(agent, scope, step, step.writes.map((w) => resolveRuntime(w, vars)), { registered: engine.mcpNames, allowed: allowedTools(engine, agent, skill) })
   const files = await resolveReads(skill.reads, ctx.directory, vars)
   const prompt = composePrompt(engine, step, ctx, skill, scope, vars, agent)
   const abort = new AbortController()
@@ -167,6 +168,8 @@ export async function runScriptStep(engine: Engine, step: ScriptStep, ctx: Ctx):
     const reason = String(r.json?.reason ?? "script reported ok: false")
     await finishStep(engine, key, "failed", { ...attempt, failure: reason, failureClass: "script" })
     engine.log(`  ${key}: check failed: ${reason}`)
+    // A check that no retry can fix (something a person has to provide) halts the job instead.
+    if (r.json?.halt === true) throw stopJob(engine, `${step.script}: ${reason}\nFix it, then run slate continue.`)
     return failedAt(step.id, reason)
   }
   await finishStep(engine, key, "passed", attempt)

@@ -24,6 +24,7 @@ cd my-project
 slate init                            # config, then discovery opens in OpenCode: talk it through, then quit
 slate discover                        # reopen discovery if you quit before it was done
 slate start                           # plan and build; asks supervised (here) or unattended (background)
+slate check                           # what the job needs (tools, image input, discovery's needs), checked for free
 slate status                          # where the job is, what it needs from you, what it cost
 slate inbox                           # answer open questions one at a time
 slate log s1-t1                       # why a task looks the way it does
@@ -44,6 +45,7 @@ contract files and makes no model calls. It is the fastest way to see what a pac
 bin/slate.ts                 CLI entrypoint
 src/cli/                     nine commands; every one accepts --json
 src/engine/                  the loop, one concern per file (see below)
+src/engine/capabilities.ts   what steps require (tools, model modalities, discovery needs) and the free checks
 src/pack/                    pack schema (zod), loader/validator, installed-pack registry
 src/opencode/adapter.ts      the ONE module that talks to @opencode/sdk (Runtime interface impl)
 src/opencode/plugin.ts       the Slate plugin: agent/skill transforms, consult tool, gates, retry hook
@@ -67,6 +69,8 @@ A project Slate manages gets `slate.config.yml` at its root and everything else 
 | `sequence.ts` | steps in order; skips what passed; hands a failure upward |
 | `step.ts` | the leaf steps: skill (agent session + output contract), script, approval |
 | `loops.ts` | `until` rounds, `over` items, what happens when rounds run out |
+| `parallel.ts` | lanes side by side; an `over` loop in a lane ends only when every lane is idle |
+| `capabilities.ts` | requirements and the preflight: checks tools, MCP servers, model modalities and discovery needs, free |
 | `prepare.ts` | job context, scope, permission rules, attached files, the step prompt |
 | `inbox.ts` | questions: open, wait, answer (in process or via `.slate/answers/`) |
 | `spend.ts` | cost accounting and budget caps |
@@ -115,6 +119,12 @@ while step := manifest.next(state):
 * **Resume never replays a partial step.** A step is recorded only when it finishes; on `continue` any
   step still marked running is discarded and re-run. Iteration values from `over` scripts are recorded
   so replay does not re-ask the script.
+* **Requirements are checked before any work, for free.** On every `start` and `continue` (and again
+  when a job reaches plan after running discovery itself) Slate collects what the remaining steps
+  require: tools (capability checks and their MCP servers), model modalities on the tiers the steps
+  run on, and the pack's `needs` file. Nothing calls a model. Anything missing halts the job with
+  the fix, unless it is waived in `slate.config.yml` (`capabilities.waive`), in which case agents
+  are told it is unavailable. `slate check` runs the same checks on demand.
 * **Isolation.** A loop's items get their own worktree when the loop says so (`worktree: true`, the
   default for `as: task` loops in build): a `git worktree add` on branch `slate/<item>`, falling back
   to a copy. `worktree: git` never copies: without git the items run in the project one at a time,
@@ -135,6 +145,8 @@ while step := manifest.next(state):
 | infra retry | `ctx.session.hook("retry")` |
 | questions | `permission.asked` and `form.created` events → inbox; answered with `permission.reply` / `session.form.reply` |
 | cost | `session.get().cost` and `tokens` (v2 exposes per-session cost directly) |
+| capability `mcp` | `mcp.add({ server, location, config })` per warmed directory, `codemode: false`; its tools are permission actions `<server>_<tool>`, denied except to agents/skills that require the capability |
+| `requires.model` | `model.list` → `capabilities.input` / `output` (models.dev modalities) |
 | worktrees | `worktree.create({ projectID, name, directory })` |
 
 Facts learned in the spike that the adapter depends on:
@@ -146,6 +158,16 @@ Facts learned in the spike that the adapter depends on:
    embedded hosts. Slate pins `{ providerID, id }` on every session from `slate.config.yml`.
 3. `session.create` accepts per-session `permissions` and they persist on the session.
 4. The SQLite database directory must exist before `OpenCode.create`.
+5. `mcp.add` keeps the server in memory for that location only (it never writes the project's config),
+   so the adapter adds every capability server to each directory it warms. `mcp.list` reports
+   `connected | pending | failed | needs_auth | disabled` without any model call.
+6. MCP tools are registered as `<server>_<tool>` (non-alphanumerics become `_`); with `codemode`
+   left on they hide behind `execute`, so Slate sets `codemode: false` to permission them one by one.
+7. Two parts of the host log outside the `log` option: the process spawner (Effect's default logger,
+   `console.log`) and the MCP client (`console.debug`). The adapter mutes console.log/info/debug while
+   the host runs; Slate itself prints only through process.stdout/stderr.
+8. `@playwright/mcp` uses the installed Chrome by default; `--browser chromium` wants a newer build
+   than Playwright's own cache may have. The capability check drives the server once to find out.
 
 ## Pack schema
 
@@ -158,20 +180,49 @@ Without a `lead`, a generic one with Slate's rules takes over.
 See `packs/full-cycle-software-development/slate-pack.yml` for a complete example. Step types:
 `skill` (`skill`, `by`, `model?`, `writes?`, `result?`, `scope?`, `consult?`, `gates?`), `loop`
 (`over`/`until`, `as`, `max`, `concurrency?`, `on_exhausted?` = `ask-human | ask-decision-agent | fail`,
-`worktree?`, `steps`), `approval` (`prompt`, `show?`), `script` (`script`, `args?`). An `until` round
+`worktree?`, `steps`), `approval` (`prompt`, `show?`), `script` (`script`, `args?`), `parallel` (`steps`:
+two or more lanes that run side by side; an `over` loop that is a lane ends only when every lane is
+idle and none has more work, so lanes can feed each other; inside a lane, `done` from the loop's
+script means "nothing now"). An `until` round
 passes when `{ result: <step> }` has verdict `pass`, when `{ script, args }` answers `{ "pass": true }`,
 or, with `until: all-pass`, when every step in the round passed. The reference pack uses `all-pass`
 for its `planning` loop (rejecting the plan with a note rewrites it) and its `design` loop. `${name}` resolves from config at load;
-`{story}`, `{task}`, `{round}`, `{round.<loop>}`, `{workspace}`, `{run}`, `{step}` resolve per execution.
+`{story}`, `{task}`, `{round}`, `{round.<loop>}`, `{workspace}`, `{run}`, `{step}` resolve per execution
+(script `args` may use `${name}` too).
 Scripts are split in two: `scripts/<id>.yml` (description, `run`, `timeout`) and the code in
 `scripts/scripts/`, written in TypeScript and run with Bun (`run: "bun $SLATE_PACK/scripts/scripts/<id>.ts"`;
 Bun runs `.ts` directly and has `Bun.YAML` built in). The loader rejects code files placed directly in
 `scripts/`. A script prints one JSON object and exits 0; any other exit means it is broken and stops
-the job. Scripts receive `SLATE_WORKSPACE`, `SLATE_RUN`, `SLATE_PACK`, `SLATE_VAR_<NAME>`, and for `over` loops
+the job. `{ "ok": false }` is a failed check; add `"halt": true` when no retry can fix it (something a
+person has to provide) and the job halts instead. Scripts receive `SLATE_WORKSPACE`, `SLATE_RUN`,
+`SLATE_PACK`, `SLATE_VAR_<NAME>` (including `SLATE_VAR_WAIVED`, the waived ids), and for `over` loops
 `SLATE_CLAIMED` / `SLATE_RUNNING` (JSON arrays) so they never hand out the same item twice.
 
-`slate pack validate <dir>` checks schemas, every id reference, and roles (only workers run steps,
-reviewers never consult).
+Requirements. Agents, skills and scripts may declare
+`requires: { tools: [<capability>], model: { input: [image|audio|video|pdf], output: [...] } }`
+(scripts: tools only). A capability is `capabilities/<id>.yml` in the pack or in slate-core:
+`description`, `check` (a command under the script contract that must cost nothing: no model, no paid
+API call), `install` (shown when the check fails) and optionally `mcp: { command, environment?,
+startup? }`, a local MCP server whose tools only the agents and skills that require it may call (its
+check receives the command in `SLATE_MCP_COMMAND` so it can drive the server once). A pack's
+`needs: <file>` names a file discovery writes (the reference pack: `specs/capabilities.yaml`) that
+maps what the product takes beyond code (sound, images, ...) to an installed `skill:` or
+`capability:`; a need mapped to nothing halts the job before planning, and the tools of mapped
+skills go to every worker. `.slate/capabilities.md` lists the installed skills and tools for
+discovery. In `slate.config.yml`, `capabilities.waive` lists tool ids, modality ids
+(`image-input`, `audio-output`, ...) and need ids to go without.
+
+`slate pack validate <dir>` checks schemas, every id reference (including required tools), and roles
+(only workers run steps, reviewers never consult).
+
+The reference pack builds in two lanes. Stories build and land in one; in the other, every story
+that lands with `screens:` gets a UX review: `ux-screenshots` serves what has landed from a
+throwaway checkout, screenshots each screen at every `ux_viewports` size and measures overflowing
+text, overlapping controls, small touch targets and horizontal scroll; the UX designer reviews the
+screenshots against the spec; `file-ux-fixes` turns must-fix issues into a fix story the story lane
+builds next. `ux_passes` bounds the rounds per story (0 turns it off). Builders list stand-ins they
+create under `placeholders:` in their build report, and `check-placeholders` halts the close phase
+while any is unchanged (`placeholders: report` ships them, reported in the run summary).
 
 `packs/slate-core` is a pack like any other plus `prompts/*.md`: the step framing, the contract
 re-prompt, consult framing, the gate reviewer's answer format, pack proposal, the stuck-loop decision

@@ -27,6 +27,24 @@ export const ScopeSchema = z.object({
 })
 export type Scope = z.infer<typeof ScopeSchema>
 
+/** What a model must accept or produce: the modalities models.dev lists for it. */
+export const Modality = z.enum(["text", "image", "audio", "video", "pdf"])
+export type Modality = z.infer<typeof Modality>
+
+/**
+ * What an agent, skill or script needs before it can do its work. `tools` are capability ids
+ * (`capabilities/<id>.yml` in the pack or in slate-core); `model` lists modalities the model the
+ * step runs on must accept (`input`) or produce (`output`). Slate checks all of it before the job
+ * starts, without spending tokens, and halts when something is missing and not waived.
+ */
+export const RequiresSchema = z
+  .object({
+    tools: z.array(Id).default([]),
+    model: z.object({ input: z.array(Modality).default([]), output: z.array(Modality).default([]) }).default({ input: [], output: [] }),
+  })
+  .default({ tools: [], model: { input: [], output: [] } })
+export type Requires = z.infer<typeof RequiresSchema>
+
 export const PermissionRuleSchema = z.object({
   action: z.string(),
   resource: z.string(),
@@ -118,7 +136,17 @@ export type LoopStep = {
   worktree?: boolean | "git"
   steps: Step[]
 }
-export type Step = z.infer<typeof SkillStepSchema> | z.infer<typeof ScriptStepSchema> | z.infer<typeof ApprovalStepSchema> | LoopStep
+/**
+ * Steps that run side by side, each a lane. An `over` loop that is a lane ends only when every lane
+ * is idle and none has more work, so lanes can feed each other (a review lane filing fix stories for
+ * the story lane). The first failing lane fails the step once all lanes have ended.
+ */
+export type ParallelStep = {
+  id: string
+  type: "parallel"
+  steps: Step[]
+}
+export type Step = z.infer<typeof SkillStepSchema> | z.infer<typeof ScriptStepSchema> | z.infer<typeof ApprovalStepSchema> | LoopStep | ParallelStep
 
 export const LoopStepSchema: z.ZodType<LoopStep> = z.lazy(() =>
   z
@@ -141,8 +169,16 @@ export const LoopStepSchema: z.ZodType<LoopStep> = z.lazy(() =>
     }),
 ) as z.ZodType<LoopStep>
 
+export const ParallelStepSchema: z.ZodType<ParallelStep> = z.lazy(() =>
+  z.object({
+    id: Id,
+    type: z.literal("parallel"),
+    steps: z.array(StepSchema).min(2, "a parallel step needs at least two lanes"),
+  }),
+) as z.ZodType<ParallelStep>
+
 export const StepSchema: z.ZodType<Step> = z.lazy(() =>
-  z.discriminatedUnion("type", [SkillStepSchema, ScriptStepSchema, ApprovalStepSchema, LoopStepSchema as never]),
+  z.discriminatedUnion("type", [SkillStepSchema, ScriptStepSchema, ApprovalStepSchema, LoopStepSchema as never, ParallelStepSchema as never]),
 ) as z.ZodType<Step>
 
 export type SkillStep = z.infer<typeof SkillStepSchema>
@@ -168,6 +204,12 @@ export const ManifestSchema = z.object({
    * (the files written by skill steps in phases.discovery) to the agents that own them.
    */
   discovery: z.object({ lead: Id.optional() }).default({}),
+  /**
+   * A file discovery writes (e.g. `specs/capabilities.yaml`) that lists what building the product
+   * takes beyond writing code, each need mapped to the installed skill or capability that covers it.
+   * Before planning, Slate halts the job while any need is covered by nothing (and not waived).
+   */
+  needs: z.string().optional(),
   phases: z.object({
     discovery: z.array(StepSchema).default([]),
     plan: z.array(StepSchema).default([]),
@@ -184,6 +226,7 @@ export const AgentFileSchema = z.object({
   scope: ScopeSchema.default({}),
   permissions: z.array(PermissionRuleSchema).default([]),
   steps: z.number().int().positive().optional(),
+  requires: RequiresSchema,
   prompt: z.string().default(""),
 })
 export type AgentFile = z.infer<typeof AgentFileSchema>
@@ -194,6 +237,7 @@ export interface AgentSpec extends AgentFile {
 export const SkillFileSchema = z.object({
   description: z.string().default(""),
   reads: z.array(z.string()).default([]),
+  requires: RequiresSchema,
   prompt: z.string().min(1),
 })
 export type SkillFile = z.infer<typeof SkillFileSchema>
@@ -205,10 +249,41 @@ export const ScriptFileSchema = z.object({
   description: z.string().default(""),
   run: z.string().min(1),
   timeout: z.union([z.string(), z.number()]).default("30s"),
+  /** Only `tools` applies: a script runs no model. */
+  requires: RequiresSchema,
 })
 export type ScriptFile = z.infer<typeof ScriptFileSchema>
 export interface ScriptSpec extends ScriptFile {
   id: string
+  timeoutMs: number
+}
+
+/**
+ * `capabilities/<id>.yml`: a tool agents, skills and scripts can require. `check` follows the
+ * script contract (one JSON object, `{ "ok": true }` or `{ "ok": false, "reason": ... }`, exit 0)
+ * and must cost nothing: no model calls, no paid API calls. `mcp` is a local MCP server Slate
+ * registers in OpenCode; only agents and skills that require the capability may call its tools.
+ */
+export const CapabilityFileSchema = z.object({
+  description: z.string().default(""),
+  check: z.string().min(1),
+  timeout: z.union([z.string(), z.number()]).default("60s"),
+  /** How to get it, shown when the check fails. */
+  install: z.string().default(""),
+  mcp: z
+    .object({
+      command: z.array(z.string()).min(1),
+      environment: z.record(z.string(), z.string()).optional(),
+      /** Seconds the server may take to start (a first `npx` run downloads it). */
+      startup: z.number().int().positive().default(120),
+    })
+    .optional(),
+})
+export type CapabilityFile = z.infer<typeof CapabilityFileSchema>
+export interface CapabilitySpec extends CapabilityFile {
+  id: string
+  /** The pack that defines it: `$SLATE_PACK` for its check. */
+  packDir: string
   timeoutMs: number
 }
 

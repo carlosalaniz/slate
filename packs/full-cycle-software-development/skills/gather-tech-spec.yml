@@ -1,6 +1,25 @@
 description: "Write the technical spec: stack, structure, dependencies, testing."
-reads: [".slate/brief.md", "specs/product-scope.md", "specs/uiux-spec.md", "package.json"]
+reads: [".slate/brief.md", "specs/product-scope.md", "specs/uiux-spec.md", "package.json", ".slate/capabilities.md"]
 prompt: |
   Write `specs/tech-spec.md`: language and runtime, project layout (directories and their ownership),
   allowed dependencies (exact list; builders may not add others), data model, testing strategy and
   the exact command that runs all tests, coding conventions. Keep it short and decisive.
+  Also give the command that serves the app for a browser, with `{port}` where the port goes, on a
+  line of its own: "serve command: `npm run dev -- --port {port} --strictPort`" (or "serve command:
+  `none`" when the product has no screens). Screenshots of every story's screens are taken with it.
+
+  Then write `specs/capabilities.yaml`: everything building this product takes beyond writing code,
+  such as sound, speech, images, video or other generated assets, or an outside service the build
+  itself has to call. `.slate/capabilities.md` lists the skills and tools installed. Map each need
+  to the one that covers it, or to nothing:
+  ```yaml
+  needs:
+    - id: audio-synthesis                  # kebab-case
+      for: 47 spoken clips (EN/ES) generated at build time with Deepgram
+      skill: generate-speech               # an installed skill that does it, or
+      # capability: some-tool              # an installed tool, or
+      # (neither)                          # nothing installed covers it
+  ```
+  Never plan around a gap with stand-ins (silent files, placeholder images): a need nothing covers
+  stops the job before planning until someone adds the skill or decides to go without it. With no
+  such needs, write `needs: []`.

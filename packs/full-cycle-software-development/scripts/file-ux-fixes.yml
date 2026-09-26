@@ -1,0 +1,3 @@
+description: Files a UX review's must-fix issues as a fix story in the plan (committed on the project's branch).
+run: "bun $SLATE_PACK/scripts/scripts/file-ux-fixes.ts"
+timeout: 11m

@@ -61,6 +61,14 @@ runtime:
   contract_reprompts: 1       # times a step is re-prompted when its output contract is missed
   worktrees: git              # git | copy | none — worktrees for loops that ask for them; none runs everything in place
 
+# Requirements. Agents, skills and scripts declare what they need (`requires:` tools such as
+# playwright, and model modalities such as image input); discovery lists what the product needs
+# (specs/capabilities.yaml). Before any work, Slate checks all of it for free (no model calls) and
+# halts with the fix when something is missing. Waive an id here to go without it instead:
+# nothing checks it and agents are told it is unavailable. `slate check` runs the checks on demand.
+capabilities:
+  waive: []                   # e.g. [playwright, image-input, audio-synthesis]
+
 # Pack-specific config. These override the pack's own defaults and fill `${config}`
 # placeholders in the pack. The keys below are the reference pack's; your pack may differ.
 config:
@@ -74,6 +82,10 @@ config:
   max_tasks_per_story: 20
   max_close_rounds: 3         # rounds to land a story (merge in other stories, resolve, land)
   story_concurrency: 2        # stories built in parallel, each in its own git worktree (1 without git)
+  ux_passes: 2                # visual reviews per UI story: screenshots -> UX designer -> fix story (0 turns it off)
+  ux_concurrency: 1           # visual reviews running beside the build at once
+  ux_viewports: "320x568,390x844,768x1024"   # widths x heights the screenshots are taken at
+  ux_max_screens: 6           # screens per review, so a review stays small
 # ---------------------------------------------------------------------------------------------
 # .slate_defaults.yml (separate file): answers for `slate init`, so trying Slate out does not mean
 # answering the same prompts every time. Put it in the project directory, any parent, or your home

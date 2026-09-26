@@ -1,0 +1,3 @@
+description: Next landed story with screens to review (within the UX passes); nothing when UX review is off.
+run: "bun $SLATE_PACK/scripts/scripts/next-ux-review.ts"
+timeout: 30s

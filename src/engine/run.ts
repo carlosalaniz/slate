@@ -7,7 +7,9 @@ import { loadCorePack } from "./core-pack.ts"
 import { jobContext, baseVars, loadPinnedPack } from "./prepare.ts"
 import { runIntake } from "./intake.ts"
 import { runSequence } from "./sequence.ts"
-import { watchControl } from "./control.ts"
+import { watchControl, stopJob } from "./control.ts"
+import { checkContextOf, collectRequirements, mcpServers, preflight, waived, writeCatalog } from "./capabilities.ts"
+import type { LoadedPack, Phase } from "./types.ts"
 
 /**
  * run — the job lifecycle: intake once, then discovery, plan, build and close in order.
@@ -28,9 +30,17 @@ export async function runJob(engine: Engine): Promise<JobState> {
     if (engine.state.phase === "intake") await runIntake(engine)
     if (!engine.pack) await loadPinnedPack(engine)
     const pack = engine.pack!
+    const startedIn = engine.state.phase
+    const req = await collectRequirements(checkContextOf(engine), pack, startedIn)
+    engine.sharedTools = req.sharedTools
+    engine.mcpNames = mcpServers(pack, req, waived(engine)).map((s) => s.name)
     await engine.o.runtime.start(jobContext(engine, pack))
+    await writeCatalog(engine.o.root, pack, engine.core)
+    await requireCapabilities(engine, pack, req)
     for (const phase of PHASES) {
       if (phaseIndex(engine.state.phase) > phaseIndex(phase)) continue
+      // A job that ran discovery itself learns what the product needs only now.
+      if (phase === "plan" && phaseIndex(startedIn) < phaseIndex("plan")) await requireCapabilities(engine, pack, await collectRequirements(checkContextOf(engine), pack, "plan"))
       await engine.o.state.update((s) => {
         s.phase = phase
       })
@@ -64,6 +74,23 @@ export async function runJob(engine: Engine): Promise<JobState> {
     await engine.o.runtime.close()
   }
   return engine.state
+}
+
+/**
+ * Registers the MCP servers the job needs, runs every requirement check (none spends tokens) and
+ * halts the job, listing each fix, when something is missing and not waived. `slate continue`
+ * checks again.
+ */
+async function requireCapabilities(engine: Engine, pack: LoadedPack, req: Awaited<ReturnType<typeof collectRequirements>>): Promise<void> {
+  for (const t of req.sharedTools) engine.sharedTools.add(t)
+  const servers = mcpServers(pack, req, waived(engine))
+  for (const s of servers) if (!engine.mcpNames.includes(s.name)) engine.mcpNames.push(s.name)
+  await engine.o.runtime.ensureMcp(servers)
+  const r = await preflight(checkContextOf(engine), pack, req)
+  engine.o.audit.append({ type: "preflight", ok: r.ok, checked: r.checked, waived: r.waived, problems: r.problems })
+  if (r.checked.length) engine.log(`requirements checked: ${r.checked.join(", ")}${r.waived.length ? `; waived: ${r.waived.join(", ")}` : ""}`)
+  if (r.ok) return
+  throw stopJob(engine, `missing requirements, so the job is halted before any work that needs them:\n${r.problems.map((p) => `  - ${p}`).join("\n")}\nFix them, then run slate continue (\`slate check\` re-runs the checks alone).`)
 }
 
 /**

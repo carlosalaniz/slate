@@ -7,12 +7,14 @@ import {
   AgentFileSchema,
   SkillFileSchema,
   ScriptFileSchema,
+  CapabilityFileSchema,
   ExhaustedSimple,
   type Manifest,
   type Step,
   type AgentSpec,
   type SkillSpec,
   type ScriptSpec,
+  type CapabilitySpec,
   type LoopStep,
   type ExhaustedPolicy,
   PHASES,
@@ -20,6 +22,7 @@ import {
 import type { LoadedPack } from "../engine/types.ts"
 import { resolveConfigValue } from "../engine/vars.ts"
 import { listVars } from "../engine/vars.ts"
+import { bundledPacksDir } from "../config/paths.ts"
 
 export class PackError extends Error {
   constructor(public readonly problems: string[]) {
@@ -61,19 +64,26 @@ function formatZod(e: unknown): string {
   return (e as Error).message
 }
 
-/** Walks every step in every phase, depth first, with the enclosing loop chain. */
+/** Walks every step in every phase, depth first, with the enclosing loop chain (parallel lanes are walked through). */
 export function* walkSteps(manifest: Manifest): Generator<{ step: Step; phase: (typeof PHASES)[number]; parents: LoopStep[] }> {
   function* walk(steps: Step[], phase: (typeof PHASES)[number], parents: LoopStep[]): Generator<{ step: Step; phase: (typeof PHASES)[number]; parents: LoopStep[] }> {
     for (const step of steps) {
       yield { step, phase, parents }
       if (step.type === "loop") yield* walk(step.steps, phase, [...parents, step])
+      else if (step.type === "parallel") yield* walk(step.steps, phase, parents)
     }
   }
   for (const phase of PHASES) yield* walk(manifest.phases[phase], phase, [])
 }
 
 /** Validates ids and every cross reference. Returns problems; empty means valid. */
-export function validatePack(manifest: Manifest, agents: Record<string, AgentSpec>, skills: Record<string, SkillSpec>, scripts: Record<string, ScriptSpec>): string[] {
+export function validatePack(
+  manifest: Manifest,
+  agents: Record<string, AgentSpec>,
+  skills: Record<string, SkillSpec>,
+  scripts: Record<string, ScriptSpec>,
+  capabilities: Record<string, CapabilitySpec> = {},
+): string[] {
   const problems: string[] = []
   const ids = new Map<string, string>()
   const all = [...walkSteps(manifest)]
@@ -123,24 +133,59 @@ export function validatePack(manifest: Manifest, agents: Record<string, AgentSpe
   for (const [id, a] of Object.entries(agents)) {
     if (a.role === "consultant" && (a.scope.modify?.length ?? 0) > 0) problems.push(`agents/${id}: consultants cannot declare scope.modify`)
   }
+  const known = Object.keys(capabilities)
+  const checkTools = (where: string, tools: string[]) => {
+    for (const t of tools) if (!capabilities[t]) problems.push(`${where}: requires unknown tool '${t}' (known: ${known.join(", ") || "none"}; add capabilities/${t}.yml)`)
+  }
+  for (const [id, a] of Object.entries(agents)) checkTools(`agents/${id}`, a.requires.tools)
+  for (const [id, sk] of Object.entries(skills)) checkTools(`skills/${id}`, sk.requires.tools)
+  for (const [id, sc] of Object.entries(scripts)) {
+    checkTools(`scripts/${id}`, sc.requires.tools)
+    if (sc.requires.model.input.length || sc.requires.model.output.length) problems.push(`scripts/${id}: a script runs no model; requires.model does not apply`)
+  }
   return problems
 }
 
-/** `scripts/` holds only the `.yml` descriptions; the code goes in `scripts/scripts/`. */
+/** `scripts/` (and `capabilities/`) hold only the `.yml` descriptions; the code goes in `<dir>/scripts/`. */
 async function checkScriptsLayout(dir: string): Promise<string[]> {
   if (!(await isDir(dir))) return []
   const problems: string[] = []
+  const base = path.basename(dir)
   for (const name of await listDir(dir)) {
     if (/\.ya?ml$/.test(name) || name === "scripts" || name.startsWith(".")) continue
-    problems.push(`scripts/${name}: only .yml files belong in scripts/; put script code in scripts/scripts/`)
+    problems.push(`${base}/${name}: only .yml files belong in ${base}/; put script code in ${base}/scripts/`)
   }
   return problems
+}
+
+/** A pack's `capabilities/`; `$SLATE_PACK` in their checks is that pack's directory. */
+async function readCapabilities(packDir: string, problems: string[]): Promise<Record<string, CapabilitySpec>> {
+  const dir = path.join(packDir, "capabilities")
+  problems.push(...(await checkScriptsLayout(dir)))
+  return readYamlDir(
+    dir,
+    (raw, id): CapabilitySpec => {
+      const f = CapabilityFileSchema.parse(raw)
+      return { id, ...f, packDir: path.resolve(packDir), timeoutMs: parseDuration(f.timeout, 60_000) }
+    },
+    problems,
+  )
+}
+
+/** slate-core's capabilities are available to every pack; a pack's own file with the same id wins. */
+async function coreCapabilities(packDir: string): Promise<Record<string, CapabilitySpec>> {
+  const core = path.join(bundledPacksDir(), "slate-core")
+  if (path.resolve(packDir) === path.resolve(core)) return {}
+  const problems: string[] = []
+  const caps = await readCapabilities(core, problems)
+  if (problems.length) throw new PackError(problems.map((p) => `slate-core ${p}`))
+  return caps
 }
 
 export function findStep(steps: Step[], id: string): Step | undefined {
   for (const s of steps) {
     if (s.id === id) return s
-    if (s.type === "loop") {
+    if (s.type === "loop" || s.type === "parallel") {
       const f = findStep(s.steps, id)
       if (f) return f
     }
@@ -163,12 +208,21 @@ export function resolveManifest(manifest: Manifest, config: Record<string, unkno
     if (!Number.isInteger(n) || n < 0) throw new PackError([`${where}: expected a non-negative integer, got ${JSON.stringify(r)}`])
     return n
   }
+  /** Script arguments may carry config too (`args: ["${ux_passes}"]`); they stay strings. */
+  function args(list: string[], where: string): string[] {
+    return list.map((a) => String(resolveConfigValue<unknown>(a, config, where)))
+  }
   function steps(list: Step[], phase: string): Step[] {
     return list.map((s) => {
+      if (s.type === "parallel") return { ...s, steps: steps(s.steps, phase) }
+      if (s.type === "script") return { ...s, args: args(s.args, `${phase}/${s.id}.args`) }
       if (s.type !== "loop") return s
       const where = `${phase}/${s.id}`
+      const until = s.until && typeof s.until === "object" && "script" in s.until ? { ...s.until, args: args(s.until.args, `${where}.until.args`) } : s.until
       return {
         ...s,
+        over: s.over ? { ...s.over, args: args(s.over.args, `${where}.over.args`) } : undefined,
+        until,
         max: num(s.max, `${where}.max`),
         concurrency: s.concurrency === undefined ? undefined : num(s.concurrency, `${where}.concurrency`),
         on_exhausted: policy(s.on_exhausted, `${where}.on_exhausted`),
@@ -212,7 +266,8 @@ export async function loadPack(dir: string, overrides: Record<string, unknown> =
     },
     problems,
   )
-  problems.push(...validatePack(manifest, agents, skills, scripts))
+  const capabilities = { ...(await coreCapabilities(dir)), ...(await readCapabilities(dir, problems)) }
+  problems.push(...validatePack(manifest, agents, skills, scripts, capabilities))
   // Skill prompts may only use runtime vars we know how to provide.
   for (const s of Object.values(skills)) {
     for (const v of listVars(s.prompt + "\n" + s.reads.join("\n"))) {
@@ -228,5 +283,5 @@ export async function loadPack(dir: string, overrides: Record<string, unknown> =
     if (e instanceof PackError) throw e
     throw new PackError([(e as Error).message])
   }
-  return { dir: path.resolve(dir), manifest: resolved, agents, skills, scripts, config }
+  return { dir: path.resolve(dir), manifest: resolved, agents, skills, scripts, capabilities, config }
 }

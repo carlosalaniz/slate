@@ -12,10 +12,15 @@ describe("pack loader", () => {
     expect(r.ok).toBe(true)
     if (r.ok) {
       expect(Object.keys(r.pack.agents).sort()).toEqual(["analyst", "architect", "builder", "checker", "discovery-lead", "integrator", "product-owner", "product-owner-consultant", "reviewer", "staff-engineer", "uiux-designer"])
-      expect(Object.keys(r.pack.skills)).toHaveLength(12)
-      const loop = r.pack.manifest.phases.build.find((s) => s.id === "story-loop")!
-      expect(loop.type).toBe("loop")
-      if (loop.type === "loop") expect(loop).toMatchObject({ max: 50, concurrency: 2, worktree: "git" })
+      expect(Object.keys(r.pack.skills)).toHaveLength(13)
+      const lanes = r.pack.manifest.phases.build.find((s) => s.id === "build-lanes")!
+      if (lanes.type !== "parallel") throw new Error("expected the build lanes")
+      expect(lanes.steps.map((s) => s.id)).toEqual(["story-loop", "ux-review-loop"])
+      expect(lanes.steps[0]).toMatchObject({ type: "loop", max: 50, concurrency: 2, worktree: "git" })
+      // ${config} in script args is resolved at load
+      expect(lanes.steps[1]).toMatchObject({ type: "loop", over: { script: "next-ux-review", args: ["2"] }, concurrency: 1 })
+      expect(r.pack.manifest.needs).toBe("specs/capabilities.yaml")
+      expect(r.pack.agents.builder!.requires).toEqual({ tools: ["playwright"], model: { input: ["image"], output: [] } })
     }
   })
 

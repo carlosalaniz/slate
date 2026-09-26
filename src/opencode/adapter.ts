@@ -11,6 +11,7 @@ import type {
   ModelRef,
   TokenUsage,
   RuntimeQuestion,
+  McpServerSpec,
 } from "../engine/types.ts"
 import { EMPTY_TOKENS } from "../engine/types.ts"
 import { ensureDir, copyDir, removePath, isDir } from "../util/fs.ts"
@@ -58,6 +59,8 @@ export class OpenCodeRuntime implements Runtime {
   private usage = new Map<string, { cost: number; tokens: TokenUsage }>()
   private sdkVersion = "unknown"
   private warmed = new Set<string>()
+  /** MCP servers every location gets (OpenCode keeps `mcp.add` in memory, per location). */
+  private mcp = new Map<string, McpServerSpec>()
 
   constructor(private readonly opts: OpenCodeRuntimeOptions = {}) {}
 
@@ -69,8 +72,19 @@ export class OpenCodeRuntime implements Runtime {
     this.opts.log?.(line)
   }
 
+  /**
+   * Parts of the embedded host log around OpenCode's `log` option: its process spawner (Effect's
+   * default logger, via console.log: "spawning process" for every MCP server) and the MCP client
+   * (console.debug). Slate prints with process.stdout/stderr, never console, so while the host runs
+   * those console methods are muted instead of breaking into the live view.
+   */
+  private restoreConsole?: () => void
+
   async start(job: JobContext): Promise<void> {
     this.job = job
+    const saved = { log: console.log, info: console.info, debug: console.debug }
+    console.log = console.info = console.debug = () => undefined
+    this.restoreConsole = () => Object.assign(console, saved)
     await ensureDir(path.dirname(job.dbPath))
     await ensureDir(job.consultsDir)
     const sdk = await import("@opencode/sdk")
@@ -131,6 +145,50 @@ export class OpenCodeRuntime implements Runtime {
       if (probe) await this.oc.sessions.remove({ sessionID: probe }).catch(() => undefined)
       this.warmed.add(directory)
     }
+    for (const spec of this.mcp.values()) await this.addMcp(directory, spec)
+  }
+
+  /**
+   * Direct tools (`codemode: false`), so each shows up as its own `<server>_<tool>` permission action
+   * and only the agents that require the capability are allowed to call it.
+   */
+  private async addMcp(directory: string, spec: McpServerSpec): Promise<void> {
+    const config = { type: "local", command: spec.command, environment: spec.environment, codemode: false, timeout: { startup: spec.startup * 1000 } }
+    await this.oc.mcp.add({ server: spec.name, location: { directory }, config }).catch((e: Error) => this.log(`[opencode] could not add MCP server ${spec.name}: ${e.message}`))
+  }
+
+  async ensureMcp(servers: McpServerSpec[]): Promise<void> {
+    for (const spec of servers) {
+      if (this.mcp.has(spec.name)) continue
+      this.mcp.set(spec.name, spec)
+      for (const directory of this.warmed) await this.addMcp(directory, spec)
+    }
+  }
+
+  async mcpStatus(names: string[], timeoutMs: number): Promise<Record<string, { status: string; error?: string }>> {
+    const out: Record<string, { status: string; error?: string }> = {}
+    if (!names.length) return out
+    await this.warm(this.job.root)
+    const deadline = Date.now() + timeoutMs
+    while (true) {
+      const servers: any[] = ((await this.oc.mcp.list({ location: { directory: this.job.root } }).catch(() => ({ data: [] }))).data ?? []) as any[]
+      for (const name of names) {
+        const s = servers.find((x) => x.name === name)
+        out[name] = s ? { status: String(s.status?.status ?? "unknown"), error: s.status?.error } : { status: "missing" }
+      }
+      const settled = names.every((n) => out[n]!.status !== "pending" && out[n]!.status !== "missing")
+      if (settled || Date.now() > deadline) return out
+      await Bun.sleep(500)
+    }
+  }
+
+  async modelModalities(model: ModelRef): Promise<{ input: string[]; output: string[] } | undefined> {
+    await this.warm(this.job.root)
+    const models: any[] = ((await this.oc.model.list({ location: { directory: this.job.root } }).catch(() => ({ data: [] }))).data ?? []) as any[]
+    const m = models.find((x) => x.providerID === model.providerID && x.id === model.id)
+    const caps = m?.capabilities
+    if (!caps || !Array.isArray(caps.input)) return undefined
+    return { input: caps.input.map(String), output: Array.isArray(caps.output) ? caps.output.map(String) : ["text"] }
   }
 
   private async pumpEvents(): Promise<void> {
@@ -179,6 +237,7 @@ export class OpenCodeRuntime implements Runtime {
     } catch {
       /* ignore */
     }
+    this.restoreConsole?.()
   }
 
   async models(): Promise<{ providers: string[]; models: string[] }> {

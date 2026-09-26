@@ -9,6 +9,7 @@ import type { Ctx } from "./job.ts"
 import { JobFailed, type JobContext, type LoadedPack, type ModelRef } from "./types.ts"
 import { resolveRuntime } from "./vars.ts"
 import { renderPrompt } from "./core-pack.ts"
+import { allowedTools, waivedFor } from "./capabilities.ts"
 
 /**
  * prepare — everything worked out before an agent starts: the job context handed to the runtime,
@@ -28,6 +29,7 @@ export function jobContext(engine: Engine, pack: LoadedPack): JobContext {
     dbPath: engine.o.paths.db,
     activityPath: engine.o.paths.activity,
     core: engine.core!,
+    toolAccess: () => ({ registered: engine.mcpNames, shared: [...engine.sharedTools] }),
   }
 }
 
@@ -37,9 +39,9 @@ export function tier(engine: Engine, t: "low" | "medium" | "high"): ModelRef {
   return { providerID: engine.o.project.provider, id: engine.o.project.models[t] }
 }
 
-/** Vars every step starts with: workspace root, run id, plus anything saved in state. */
+/** Vars every step starts with: workspace root, run id, what is waived (scripts see SLATE_VAR_WAIVED), plus anything saved in state. */
 export function baseVars(engine: Engine): Record<string, string> {
-  return { workspace: engine.o.root, run: engine.state.job.id, ...engine.state.vars }
+  return { workspace: engine.o.root, run: engine.state.job.id, waived: engine.o.project.capabilities.waive.join(","), ...engine.state.vars }
 }
 
 /** Loads the pack pinned in state.json by intake and saves its resolved config. */
@@ -142,10 +144,23 @@ export function protectRules(agent: AgentSpec): PermissionRule[] {
 }
 
 /**
+ * MCP tools are permission actions named `<server>_<tool>`: every registered server's tools are
+ * denied, then the ones this session may use are allowed again.
+ */
+export function toolRules(registered: string[], allowed: string[]): PermissionRule[] {
+  const ns = (id: string) => `${id.replace(/[^a-zA-Z0-9_-]/g, "_")}_*`
+  return [
+    ...registered.map((id): PermissionRule => ({ action: ns(id), resource: "*", effect: "deny" })),
+    ...registered.filter((id) => allowed.includes(id)).map((id): PermissionRule => ({ action: ns(id), resource: "*", effect: "allow" })),
+  ]
+}
+
+/**
  * `writes` are the step's output contract: resolved for this run, editable whatever scope and
  * protect say (a task scope lists code files, not the build report the step must write).
+ * `tools` are the registered MCP servers and the ones this step may call.
  */
-export function permissionRules(agent: AgentSpec, scope: string[], step: SkillStep, writes: string[] = []): PermissionRule[] {
+export function permissionRules(agent: AgentSpec, scope: string[], step: SkillStep, writes: string[] = [], tools: { registered: string[]; allowed: string[] } = { registered: [], allowed: [] }): PermissionRule[] {
   // Broad rules first, specific rules last: OpenCode evaluates the ruleset with the last matching rule winning.
   const rules: PermissionRule[] = [...READ_ONLY_RULES, { action: "subagent", resource: "*", effect: "deny" }]
   rules.push({ action: "consult", resource: "*", effect: step.consult ? "allow" : "deny" })
@@ -155,6 +170,7 @@ export function permissionRules(agent: AgentSpec, scope: string[], step: SkillSt
     for (const g of scope) rules.push({ action: "edit", resource: g, effect: "allow" })
   }
   rules.push(...agent.permissions, ...protectRules(agent))
+  rules.push(...toolRules(tools.registered, tools.allowed))
   for (const w of writes) rules.push({ action: "edit", resource: w, effect: "allow" })
   for (const g of step.gates ?? []) rules.push({ action: g.on.action, resource: g.on.resource, effect: "ask" })
   return rules
@@ -173,7 +189,7 @@ export async function resolveReads(reads: string[], directory: string, vars: Rec
 }
 
 /** The step prompt: slate-core `prompts/step.md` around the skill prompt. */
-export function composePrompt(engine: Engine, step: SkillStep, ctx: Ctx, skill: { prompt: string }, scope: string[], vars: Record<string, string>, agent?: AgentSpec): string {
+export function composePrompt(engine: Engine, step: SkillStep, ctx: Ctx, skill: SkillSpec, scope: string[], vars: Record<string, string>, agent?: AgentSpec): string {
   const loops = [...ctx.untilStack].reverse()
   return renderPrompt(engine.core!, "step", {
     step: step.id,
@@ -193,6 +209,8 @@ export function composePrompt(engine: Engine, step: SkillStep, ctx: Ctx, skill: 
     result_field: step.result?.field ?? "",
     consult_agents: step.consult?.agents.join(" or ") ?? "",
     consult_max: step.consult?.max ?? "",
+    tools: agent ? allowedTools(engine, agent, skill).filter((t) => engine.mcpNames.includes(t)).join(", ") : "",
+    waived: agent ? waivedFor(engine, agent, skill).join(", ") : "",
     skill_prompt: resolveRuntime(skill.prompt, vars),
     step_prompt: step.prompt ? resolveRuntime(step.prompt, vars) : "",
   })

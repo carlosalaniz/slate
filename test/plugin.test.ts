@@ -7,6 +7,8 @@ import { referencePackDir } from "./helpers.ts"
 import type { PermissionRule } from "../src/pack/schema.ts"
 import { parseArgs, str, bool, num } from "../src/cli/args.ts"
 
+const NONE = { tools: [], model: { input: [], output: [] } }
+
 describe("plugin helpers", () => {
   test("reviewer verdicts require a citation to approve", () => {
     expect(parseReviewerVerdict("decision: approve\ncite: specs/tech-spec.md:12\nnote: listed")).toEqual({ decision: "approve", cite: "specs/tech-spec.md:12", note: "listed" })
@@ -21,7 +23,7 @@ describe("plugin helpers", () => {
   })
 
   test("agent rules: consultants cannot edit or shell; workers get scope allows after a deny-all", () => {
-    const consultant = agentPermissionRules({ id: "c", description: "", role: "consultant", model: "high", scope: { read: ["**"] }, permissions: [], prompt: "" })
+    const consultant = agentPermissionRules({ id: "c", description: "", role: "consultant", model: "high", scope: { read: ["**"] }, permissions: [], requires: NONE, prompt: "" })
     expect(consultant.some((r) => r.action === "edit" && r.resource === "*" && r.effect === "deny")).toBe(true)
     expect(consultant.some((r) => r.action === "shell" && r.effect === "deny")).toBe(true)
     // Reading, searching and loading skills never ask; then no nesting.
@@ -29,7 +31,7 @@ describe("plugin helpers", () => {
     expect(consultant[READ_ONLY_RULES.length]).toEqual({ action: "subagent", resource: "*", effect: "deny" })
     // The consultant's shell deny comes after the read-only shell allows, so it wins.
     expect(consultant.findLastIndex((r) => r.action === "shell" && r.effect === "deny")).toBeGreaterThan(consultant.findLastIndex((r) => r.action === "shell" && r.effect === "allow"))
-    const worker = agentPermissionRules({ id: "w", description: "", role: "worker", model: "low", scope: { modify: ["src/**"] }, permissions: [{ action: "shell", resource: "git push *", effect: "ask" }], prompt: "" })
+    const worker = agentPermissionRules({ id: "w", description: "", role: "worker", model: "low", scope: { modify: ["src/**"] }, permissions: [{ action: "shell", resource: "git push *", effect: "ask" }], requires: NONE, prompt: "" })
     const denyIdx = worker.findIndex((r) => r.action === "edit" && r.resource === "*")
     const allowIdx = worker.findIndex((r) => r.action === "edit" && r.resource === "src/**")
     expect(denyIdx).toBeLessThan(allowIdx)
@@ -38,7 +40,7 @@ describe("plugin helpers", () => {
 
   test("reviewer prompt includes inputs and the answer format", async () => {
     const core = await loadCorePack()
-    const p = reviewerPrompt(core, { id: "po", description: "", role: "reviewer", model: "low", scope: {}, permissions: [], prompt: "You are PO." }, "shell", ["npm install left-pad"], [{ path: "specs/tech-spec.md", content: "deps: none" }])
+    const p = reviewerPrompt(core, { id: "po", description: "", role: "reviewer", model: "low", scope: {}, permissions: [], requires: NONE, prompt: "You are PO." }, "shell", ["npm install left-pad"], [{ path: "specs/tech-spec.md", content: "deps: none" }])
     expect(p).toContain("You are PO.")
     expect(p).toContain("npm install left-pad")
     expect(p).toContain("=== specs/tech-spec.md ===")

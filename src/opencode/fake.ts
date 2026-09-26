@@ -1,5 +1,5 @@
 import path from "node:path"
-import type { Runtime, JobContext, RunStepRequest, RunStepResult, RepromptRequest, ReviewRequest, QuestionReply, WorktreeRequest, ModelRef } from "../engine/types.ts"
+import type { Runtime, JobContext, RunStepRequest, RunStepResult, RepromptRequest, ReviewRequest, QuestionReply, WorktreeRequest, ModelRef, McpServerSpec } from "../engine/types.ts"
 import { resolveRuntime } from "../engine/vars.ts"
 import { writeText, ensureDir, copyDir, removePath, isDir } from "../util/fs.ts"
 import { stringifyFrontmatter } from "../util/frontmatter.ts"
@@ -18,6 +18,10 @@ export interface FakeOptions {
   costPerStep?: number
   delayMs?: number
   worktrees?: "copy" | "none"
+  /** Modalities per model id (e.g. "fake-low"); default: every model accepts and produces everything. */
+  modalities?: Record<string, { input: string[]; output: string[] } | undefined>
+  /** MCP status per server name; default connected. */
+  mcp?: Record<string, { status: string; error?: string }>
 }
 
 /**
@@ -33,6 +37,7 @@ export class FakeRuntime implements Runtime {
   public readonly reprompts: string[] = []
   public readonly reviewsMade: ReviewRequest[] = []
   public readonly replies: QuestionReply[] = []
+  public readonly mcpServers: McpServerSpec[] = []
 
   constructor(private readonly opts: FakeOptions = {}) {}
 
@@ -46,6 +51,22 @@ export class FakeRuntime implements Runtime {
 
   async models() {
     return { providers: ["fake"], models: ["fake/low", "fake/medium", "fake/high"] }
+  }
+
+  async modelModalities(model: ModelRef) {
+    const all = ["text", "image", "audio", "video", "pdf"]
+    if (this.opts.modalities && model.id in this.opts.modalities) return this.opts.modalities[model.id]
+    return { input: all, output: all }
+  }
+
+  async ensureMcp(servers: McpServerSpec[]): Promise<void> {
+    for (const s of servers) if (!this.mcpServers.some((x) => x.name === s.name)) this.mcpServers.push(s)
+  }
+
+  async mcpStatus(names: string[]) {
+    const out: Record<string, { status: string; error?: string }> = {}
+    for (const n of names) out[n] = this.opts.mcp?.[n] ?? (this.mcpServers.some((s) => s.name === n) ? { status: "connected" } : { status: "missing" })
+    return out
   }
 
   private behaviorFor(stepId: string): FakeBehavior | undefined {

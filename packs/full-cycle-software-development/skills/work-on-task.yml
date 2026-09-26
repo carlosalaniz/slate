@@ -6,4 +6,13 @@ prompt: |
   left a verdict (`tasks/{task}/design-{round.design}/verdict-*.md`) or a failed test run
   (`tasks/{task}/design-{round.design}/tests-*.md`), fix everything the latest failure reports.
   Finish by writing `tasks/{task}/design-{round.design}/build-{round}.md`: what changed (files), how
-  to run the tests, known gaps.
+  to run the tests, known gaps. When you created stand-ins instead of the real thing, start the
+  report with frontmatter that lists them (paths may be globs); the run cannot finish while they are
+  still there:
+  ```
+  ---
+  placeholders:
+    - path: public/audio/**/*.mp3
+      stands_in_for: Deepgram speech clips
+  ---
+  ```

@@ -1,0 +1,30 @@
+description: Look at a landed story's screenshots against the UI/UX spec and list what must be fixed.
+reads: ["stories/{review}/ux/*.png", "stories/{review}/ux/findings.md", "specs/uiux-spec.md"]
+# Reads the screenshots attached to the prompt; it does not drive the browser itself.
+requires: { model: { input: [image] } }
+prompt: |
+  Review the screens of story {review}. The screenshots attached to this prompt were taken of the
+  landed app at every viewport the pack is configured for; `stories/{review}/ux/findings.md` lists
+  the layout problems that were measured on those pages (text wider than its button, overlapping
+  controls, touch targets under the minimum, horizontal scroll). The story's entry in
+  stories/index.yaml says which screens it changed; specs/uiux-spec.md and specs/wireframes/ say how
+  they should look.
+
+  Keep the review short and concrete. Judge only what the screenshots and measurements show:
+  alignment, spacing, text that is cut off, spills out or is too large for its control, controls out
+  of place, contrast, anything that contradicts the spec. Every measured problem that a person would
+  notice is an issue. Do not redesign screens, and do not ask for anything the spec does not.
+
+  Write `stories/{review}/ux-review.yaml`:
+  ```yaml
+  verdict: pass            # fail when any issue is must-fix
+  issues:
+    - screen: /settings      # a path from the story's screens
+      viewport: 390x844      # or "all"
+      problem: The "Save" label is wider than its button and spills out on the right.
+      expected: The label fits inside the button on one line (uiux-spec, Settings).
+      severity: must-fix     # or nice-to-have
+  ```
+  Each must-fix issue becomes an acceptance criterion of a fix story that builders will work from,
+  so write every `problem` and `expected` so that someone who cannot see the screenshot can fix and
+  check it. With no issues, write `verdict: pass` and `issues: []`.

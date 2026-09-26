@@ -1,0 +1,10 @@
+description: "Headless Chromium through Playwright: open the app, click through it, take screenshots at any viewport, measure the layout."
+# Free: resolves the library, finds the browser and launches it headless once. No model, no network.
+check: "bun $SLATE_PACK/capabilities/scripts/playwright.ts"
+timeout: 3m
+install: "`bun add -d playwright` (or npm i -D playwright) in the project, then `bunx playwright install chromium`"
+# Agents and skills that require playwright get its tools (playwright_browser_navigate,
+# playwright_browser_take_screenshot, ...). Headless and isolated: nothing touches your own browser.
+mcp:
+  command: ["npx", "-y", "@playwright/mcp@latest", "--headless", "--isolated", "--output-dir", ".slate/playwright"]
+  startup: 180

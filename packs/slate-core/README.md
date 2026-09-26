@@ -8,12 +8,14 @@ talks to agents; no TypeScript change is needed.
   is `ask-decision-agent`.
 - `prompts/*.md` are templates. `{name}` is replaced with a value. A line whose placeholders are
   all empty is left out, which is how optional lines (scope, consult, result file, ...) disappear.
+- `capabilities/` holds the tools every pack can require (a pack's own file with the same id wins):
+  `playwright` (headless Chromium; its check launches the browser and drives the MCP server once).
 - `prompts/messages.yml` holds the short texts an agent reads as a tool result or a permission
   decision: consult refusals, the consult answer wrapper, gate allow/deny/ask messages. Same rules.
 
 | Template | Sent when | Placeholders |
 | --- | --- | --- |
-| `step.md` | every skill step starts | step, phase, directory, story, task, loops, retried_loops, scope, writes, result_file, result_field, consult_agents, consult_max, skill_prompt, step_prompt |
+| `step.md` | every skill step starts | step, phase, directory, story, task, loops, retried_loops, scope, writes, result_file, result_field, consult_agents, consult_max, tools, waived, skill_prompt, step_prompt |
 | `reprompt.md` | a step ended without its output contract (missing, or YAML/JSON that does not parse) | missing, invalid, writes, result_file, result_field |
 | `plan-revision.md` | `slate plan revise` re-runs the plan steps | revision, note |
 | `consult.md` | an agent calls the `consult` tool | parent_agent, step, question |

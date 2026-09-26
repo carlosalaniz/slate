@@ -173,6 +173,8 @@ async function runOver(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqRes
   if (!engine.state.loops[key]) await engine.o.state.update((s) => (s.loops[key] = { key, loop: step.id, kind: "over", iterations: [] }))
   const wantsWorktree = engine.o.project.runtime.worktrees !== "none" && (step.worktree ?? (ctx.phase === "build" && as === "task"))
   const gitOnly = step.worktree === "git"
+  /** This loop is a lane of a parallel step: it ends only when the whole group is quiet (see parallel.ts). */
+  const lane = ctx.lane?.id === step.id ? ctx.lane.group : undefined
   /** `worktree: git` items left in the loop's own directory queue here, so two never edit it at once. */
   let inPlace: Promise<unknown> = Promise.resolve()
 
@@ -221,11 +223,15 @@ async function runOver(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqRes
       touchBranch(s, it.branch, { status: status === "interrupted" ? "idle" : status, current: undefined })
     })
   const start = (it: LoopIteration) => {
+    lane?.bump()
     const pr = runIteration(it)
       .catch((e: Error) => {
         thrown ??= e
       })
-      .finally(() => active.delete(it.n))
+      .finally(() => {
+        active.delete(it.n)
+        lane?.bump()
+      })
     active.set(it.n, pr)
     return pr
   }
@@ -268,6 +274,8 @@ async function runOver(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqRes
     }
     const claimed = iterations.map((x) => x.value)
     const running = iterations.filter((x) => x.status === "running").map((x) => x.value)
+    // Taken before asking, so work that starts or ends while the script runs makes us ask again.
+    const seen = lane?.version ?? 0
     const r = await runScript({
       script: spec,
       packDir: engine.pack!.dir,
@@ -282,19 +290,27 @@ async function runOver(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqRes
       thrown = stopJob(engine, `loop script '${spec.id}' is broken (${r.error}). Fix it, then run slate continue.`)
       break
     }
-    if (r.json?.done === true || r.json?.next === undefined || r.json?.next === null) {
-      // Nothing ready now; running items may unblock more (e.g. a dependency gets merged).
-      if (active.size > 0 && r.json?.done !== true) await Promise.race(active.values())
-      else await setDone()
-      continue
-    }
-    const value = valueToString(r.json.next)
-    if (claimed.includes(value)) {
-      if (active.size > 0) {
+    const nothing = r.json?.done === true || r.json?.next === undefined || r.json?.next === null
+    const value = nothing ? undefined : valueToString(r.json!.next)
+    if (value === undefined || claimed.includes(value)) {
+      // Nothing new now. Running items may unblock more (e.g. a dependency gets merged); in a lane,
+      // so may the other lanes, and `done` only means "nothing now".
+      const final = r.json?.done === true && !lane
+      if (active.size > 0 && !final) {
         await Promise.race(active.values())
         continue
       }
-      engine.log(`  ${key}: script returned '${value}' which is already ${running.includes(value) ? "running" : "claimed"}; treating the loop as done`)
+      if (lane) {
+        lane.settle(step.id, seen)
+        if (!lane.quiet()) {
+          await lane.changed(seen)
+          continue
+        }
+        // Stopped, or another lane failed: leave this loop open so a resume carries on with it.
+        if (engine.stopRequested || lane.failed()) break
+      } else if (value !== undefined) {
+        engine.log(`  ${key}: script returned '${value}' which is already ${running.includes(value) ? "running" : "claimed"}; treating the loop as done`)
+      }
       await setDone()
       continue
     }

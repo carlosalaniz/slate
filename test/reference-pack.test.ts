@@ -159,6 +159,16 @@ describe("parallel stories (git)", () => {
     expect(out(h.root, "status", "--porcelain")).toBe("")
   }, 120_000)
 
+  test("an integrator that writes its report but does not commit it does not wedge the story", async () => {
+    // The fake's default for merge: write stories/<story>/merged.md, commit nothing (what `--dry-run` does).
+    const h = await gitHarness({ merge: {} })
+    const st = await h.engine.run()
+    expect(st.status).toBe("done")
+    expect(out(h.root, "log", "--format=%s")).toContain("s1: done")
+    expect(out(h.root, "log", "--format=%s")).toContain("Merge story s3")
+    expect(out(h.root, "status", "--porcelain")).toBe("")
+  }, 120_000)
+
   test("a story that conflicts with one that landed first is merged, resolved and landed", async () => {
     const h = await gitHarness({
       build: {
@@ -244,6 +254,7 @@ describe("tests step", () => {
           "tech-spec": {
             run: async (req) => {
               await Bun.write(path.join(req.directory, "specs/tech-spec.md"), "test command: `test -f .tests-ok || { touch .tests-ok; echo boom; exit 1; }`\n")
+              await Bun.write(path.join(req.directory, "specs/capabilities.yaml"), "needs: []\n")
               return { skipWrites: true }
             },
           },

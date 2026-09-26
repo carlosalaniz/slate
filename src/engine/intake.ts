@@ -21,6 +21,7 @@ const NO_PACK: Omit<LoadedPack, "dir"> = {
   agents: {},
   skills: {},
   scripts: {},
+  capabilities: {},
   config: {},
 }
 

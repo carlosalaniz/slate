@@ -23,6 +23,10 @@ import { listInstalledPacks, addPack, updatePack, validatePackDir, findPack } fr
 import { ensureDir, writeJsonAtomic, writeText, readTextOr, isFile, removePath } from "../../util/fs.ts"
 import { ageOf, usd, sleep } from "../../util/time.ts"
 import { createJob, runForeground, runDetached, makeRuntime, type RunOptions } from "./run-job.ts"
+import "./check.ts"
+import { uncoveredNeeds } from "../../engine/capabilities.ts"
+import { loadCorePack } from "../../engine/core-pack.ts"
+import { loadPack } from "../../pack/loader.ts"
 
 /* ---------------------------------------------------------------------- init */
 
@@ -211,7 +215,15 @@ async function chooseDiscoveryMode(paths: ReturnType<typeof projectPaths>, flags
 /** Reports the discovery outcome; when it is done, offers to go straight into `slate start`. */
 async function afterDiscovery(check: DiscoveryCheck, out: Output): Promise<number> {
   const code = reportDiscovery(check, out)
-  if (!check.done || out.json || !process.stdin.isTTY) return code
+  if (!check.done) return code
+  // What the product needs but nothing installed covers: `slate start` would halt on it right away.
+  const p = await requireProject()
+  const gaps = await uncoveredNeeds({ root: p.root, project: p.config, core: await loadCorePack() }, await loadPack(check.pack!.dir, p.config.config))
+  if (gaps.length) {
+    out.emit(() => ["", "but the product needs things nothing installed covers; `slate start` halts until they are:", ...gaps.map((g) => `  - ${g}`), "`slate check` checks everything the job needs"], { gaps })
+    return 1
+  }
+  if (out.json || !process.stdin.isTTY) return code
   const next = await select("start planning and building now?", [{ value: "yes", label: "yes (Recommended)" }, { value: "later", hint: "run slate start when you are ready" }], "yes")
   return next === "yes" ? runCommand("start", [], out) : code
 }

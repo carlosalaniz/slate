@@ -9,8 +9,12 @@ prompt: |
       description: ...
       acceptance: [ ... ]   # verifiable statements
       depends_on: []        # ids of stories that must be finished first
+      screens: []           # paths the story adds or changes, e.g. ["/", "/settings"]; [] when it changes no screen
   ```
   First story must set up the project skeleton and test runner. Keep stories small enough for one
-  builder to finish in a few tasks.
+  builder to finish in a few tasks. `screens` matters: once a story lands, a UX review screenshots
+  exactly those paths, so list every screen whose look the story changes (as the app serves them).
+  Anything in specs/capabilities.yaml (sounds, images, other generated assets) is part of some
+  story's acceptance: the real thing, made with the skill named there, never a stand-in.
   If `.slate/plan-revisions.md` exists, it holds notes from the person who reviews this plan
   (rejections and revision requests). Apply every note to the stories.

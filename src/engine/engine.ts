@@ -30,6 +30,10 @@ export class Engine {
   readonly log: (line: string) => void
   readonly pollMs: number
   readonly answersSeen = new Set<string>()
+  /** MCP servers registered for this job (capabilities some session requires). */
+  mcpNames: string[] = []
+  /** Tools every worker may use: those of the skills and capabilities discovery's needs map. */
+  sharedTools = new Set<string>()
 
   constructor(public readonly o: EngineOptions) {
     this.pack = o.pack

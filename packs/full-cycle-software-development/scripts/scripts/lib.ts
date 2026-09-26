@@ -31,7 +31,14 @@ export function conflictedFiles(cwd = workspace): string[] {
 export interface Story {
   id: string | number
   title?: string
+  description?: string
+  acceptance?: string[]
   depends_on?: (string | number)[]
+  /** Paths of the screens the story adds or changes (e.g. "/settings"): a UX review looks at them once it lands. */
+  screens?: string[]
+  /** A fix story filed by a UX review: the story whose screens were reviewed, and that review's pass. */
+  ux_of?: string
+  ux_pass?: number
 }
 export interface StoryIndex {
   stories?: Story[]
@@ -87,6 +94,66 @@ export function taskScope(task: Task): string[] {
 /** Items this over-loop has already handed out (Slate passes them in SLATE_CLAIMED). */
 export function claimedItems(): Set<string> {
   return new Set(JSON.parse(process.env.SLATE_CLAIMED ?? "[]") as string[])
+}
+
+/**
+ * Commits the story's report (stories/<story>/merged.md) if it is written but not committed. The
+ * integrator is asked to commit it; when it does not, the story must not wedge on a dirty worktree.
+ */
+export function commitStoryReport(story: string, cwd = workspace): void {
+  const rel = `stories/${story}/merged.md`
+  if (!fs.existsSync(path.join(cwd, rel))) return
+  if (!git(["status", "--porcelain", "--", rel], cwd).out) return
+  git(["add", "--", rel], cwd)
+  git(["commit", "-m", `${story}: done`, "--", rel], cwd)
+}
+
+/** Ids Slate was told to go without (slate.config.yml capabilities.waive). */
+export function waived(): Set<string> {
+  return new Set((process.env.SLATE_VAR_WAIVED ?? "").split(",").map((s) => s.trim()).filter(Boolean))
+}
+
+/**
+ * Serializes changes to the project's branch (landing a story, filing a UX fix story):
+ * mkdir is atomic, so whoever creates the lock directory goes; a lock left by a dead process is taken over.
+ */
+export async function withProjectLock<T>(fn: () => T | Promise<T>): Promise<T> {
+  const dir = path.join(root, ".slate", "land.lock")
+  const deadline = Date.now() + 10 * 60_000
+  while (true) {
+    try {
+      fs.mkdirSync(dir)
+      fs.writeFileSync(path.join(dir, "pid"), String(process.pid))
+      break
+    } catch {
+      const owner = lockOwner(dir)
+      if (owner && !alive(owner)) fs.rmSync(dir, { recursive: true, force: true })
+      else if (Date.now() > deadline) broken(`waited 10 minutes for ${dir}; remove it if no story is landing`)
+      else await Bun.sleep(250)
+    }
+  }
+  try {
+    return await fn()
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function lockOwner(dir: string): number {
+  try {
+    return Number(fs.readFileSync(path.join(dir, "pid"), "utf8")) || 0
+  } catch {
+    return 0
+  }
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Prints the script's answer and exits 0. */

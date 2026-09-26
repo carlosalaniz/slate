@@ -9,7 +9,7 @@ import { parseFrontmatter, stringifyFrontmatter } from "../util/frontmatter.ts"
 import { renderMessage, renderPrompt } from "../engine/core-pack.ts"
 import type { SessionRegistry, SessionEntry } from "./registry.ts"
 import { toolError } from "./activity.ts"
-import { READ_ONLY_RULES, protectRules } from "../engine/prepare.ts"
+import { READ_ONLY_RULES, protectRules, toolRules } from "../engine/prepare.ts"
 
 /**
  * The Slate plugin: everything that only code inside OpenCode can do.
@@ -37,7 +37,8 @@ const CONSULTANT_RULES: PermissionRule[] = [
   { action: "question", resource: "*", effect: "deny" },
 ]
 
-export function agentPermissionRules(agent: AgentSpec): PermissionRule[] {
+/** `tools`: registered MCP servers and those every worker may use; the agent's own `requires.tools` are allowed too. */
+export function agentPermissionRules(agent: AgentSpec, tools: { registered: string[]; shared: string[] } = { registered: [], shared: [] }): PermissionRule[] {
   const rules: PermissionRule[] = [...READ_ONLY_RULES, { action: "subagent", resource: "*", effect: "deny" }]
   if (agent.role === "consultant") rules.push(...CONSULTANT_RULES)
   const modify = agent.scope.modify ?? []
@@ -46,6 +47,7 @@ export function agentPermissionRules(agent: AgentSpec): PermissionRule[] {
     for (const g of modify) rules.push({ action: "edit", resource: g, effect: "allow" })
   }
   rules.push(...agent.permissions, ...protectRules(agent))
+  rules.push(...toolRules(tools.registered, [...agent.requires.tools, ...(agent.role === "worker" ? tools.shared : [])]))
   return rules
 }
 
@@ -97,7 +99,7 @@ export function createSlatePlugin(host: PluginHost) {
               def.hidden = false
               if (a.role === "consultant") def.steps = a.steps ?? 8
               else if (a.steps) def.steps = a.steps
-              def.permissions = agentPermissionRules(a)
+              def.permissions = agentPermissionRules(a, job.toolAccess())
             })
           }
         }),
@@ -201,7 +203,7 @@ async function consult(ctx: any, host: PluginHost, input: { agent: string; quest
     model: host.tier(consultant.model),
     title: `consult ${consultant.id} for ${parent.stepId} #${n}`,
     metadata: { slateJob: job.jobId, slateConsult: true, slateParent: parent.sessionID, slateStep: parent.stepId },
-    permissions: agentPermissionRules(consultant),
+    permissions: agentPermissionRules(consultant, job.toolAccess()),
   })
   parent.children.push(child.id)
   registry.set({

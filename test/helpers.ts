@@ -18,8 +18,9 @@ export async function tmpProject(): Promise<string> {
   return dir
 }
 
+/** Tests never launch a browser or fetch the Playwright MCP server: playwright is waived unless a test says otherwise. */
 export function testConfig(over: Partial<ProjectConfig> = {}): ProjectConfig {
-  return ProjectConfigSchema.parse({ name: "t", budget: { job: 1000, per_task: 100, per_model: {} }, autonomy: { question_timeout_hours: 0, on_timeout: "keep-waiting", auto_approve: false }, runtime: { worktrees: "none", step_timeout_minutes: 1, infra_retries: 1, contract_reprompts: 1 }, ...over })
+  return ProjectConfigSchema.parse({ name: "t", capabilities: { waive: ["playwright"] }, budget: { job: 1000, per_task: 100, per_model: {} }, autonomy: { question_timeout_hours: 0, on_timeout: "keep-waiting", auto_approve: false }, runtime: { worktrees: "none", step_timeout_minutes: 1, infra_retries: 1, contract_reprompts: 1 }, ...over })
 }
 
 /** Writes a minimal pack into dir/pack and returns its path. Script code goes to scripts/scripts/<id>.ts. */

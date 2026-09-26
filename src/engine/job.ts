@@ -4,6 +4,7 @@ import type { InstalledPack } from "../pack/registry.ts"
 import type { StateStore } from "./state.ts"
 import type { AuditLog } from "./audit.ts"
 import type { Autonomy, JobState, LoadedPack, Phase, Question, Runtime } from "./types.ts"
+import type { LaneGroup } from "./parallel.ts"
 
 /**
  * job — the shapes every engine file shares: options, the per-branch context, and step results.
@@ -49,6 +50,8 @@ export interface Ctx {
   phase: Phase
   /** Enclosing `until` loops, outermost first. A failure goes to the last one; with none, the job fails. */
   untilStack: UntilFrame[]
+  /** Set inside a `parallel` step: the lane group, and which lane (a direct child's id) this is. */
+  lane?: { group: LaneGroup; id: string }
 }
 
 /** What a step or sequence reports upward. `failed` travels up to the nearest `until` loop. */

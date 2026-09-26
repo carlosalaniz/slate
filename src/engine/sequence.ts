@@ -4,6 +4,7 @@ import { stepKey, PASSED, type Ctx, type SeqResult } from "./job.ts"
 import { checkpointGate } from "./control.ts"
 import { runApproval, runScriptStep, runSkillStep } from "./step.ts"
 import { runLoop } from "./loops.ts"
+import { runParallel } from "./parallel.ts"
 
 /**
  * sequence — steps in order. A step that already passed is skipped (that is how resume works).
@@ -21,7 +22,7 @@ export async function runSequence(engine: Engine, steps: Step[], ctx: Ctx): Prom
   return PASSED
 }
 
-function runStep(engine: Engine, step: Step, ctx: Ctx): Promise<SeqResult> {
+export function runStep(engine: Engine, step: Step, ctx: Ctx): Promise<SeqResult> {
   switch (step.type) {
     case "skill":
       return runSkillStep(engine, step, ctx)
@@ -31,5 +32,7 @@ function runStep(engine: Engine, step: Step, ctx: Ctx): Promise<SeqResult> {
       return runApproval(engine, step, ctx)
     case "loop":
       return runLoop(engine, step, ctx)
+    case "parallel":
+      return runParallel(engine, step, ctx, runStep)
   }
 }

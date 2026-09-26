@@ -13,3 +13,5 @@ prompt: |
   ---
   ```
   then a one-line test summary from the tests file and, on fail, a numbered list of what must change.
+  A stand-in (silent audio, a placeholder image, lorem text, a fake key) does not meet an acceptance
+  item that asks for the real thing, even when the build report lists it under `placeholders:`.
