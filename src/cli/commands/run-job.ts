@@ -13,6 +13,7 @@ import type { ProjectCtx } from "../context.ts"
 import { CliError, type Output } from "../output.ts"
 import { logLine } from "../prompt.ts"
 import { answerInline } from "../questions.ts"
+import { followJob } from "../logview.ts"
 
 export interface RunOptions {
   dryRun: boolean
@@ -61,10 +62,20 @@ export async function createJob(p: ProjectCtx, opts: RunOptions): Promise<StateS
   return StateStore.create(p.paths.state, state)
 }
 
+/** A person is watching this run in a terminal (not the background engine writing its log file). */
+const liveView = (opts: RunOptions, out: Output) => !!process.stdout.isTTY && !opts.quiet && !out.json
+
+/** Engine messages the LogView does not cover: OpenCode and worktree notices, warnings, timeouts. */
+const SYSTEM_NOTICE = /^\s*(\[|!!|warning|question \S+ timed out|decision agent|plan revision|pack proposal)/
+
 export async function buildEngine(p: ProjectCtx, store: StateStore, opts: RunOptions, out: Output): Promise<Engine> {
   const state = store.get()
+  // In a terminal the LogView shows steps, questions and loops agent-first; the engine's own text
+  // log then only adds system notices. Elsewhere (the background engine's log file) it is all text.
+  const view = liveView(opts, out)
   const log = (line: string) => {
-    if (!opts.quiet && !out.json) logLine(line)
+    if (opts.quiet || out.json) return
+    if (!view || SYSTEM_NOTICE.test(line)) logLine(line)
   }
   const runtime = makeRuntime(p, state.job.runtime === "fake" || opts.dryRun, log)
   const audit = await AuditLog.open(p.paths.log, state.job.id)
@@ -101,12 +112,14 @@ export async function runForeground(p: ProjectCtx, store: StateStore, opts: RunO
   }
   process.once("SIGINT", onSignal)
   process.once("SIGTERM", () => engine.requestStop(false))
-  // Attached in a terminal: questions are asked inline with a picker as they appear.
+  // Attached in a terminal: progress agent-first, and questions asked inline with a picker.
+  const following = liveView(opts, out) ? followJob(p.paths) : undefined
   const stopAsking = process.stdin.isTTY && !out.json && !opts.quiet ? answerInline(p.paths) : undefined
   try {
     return await engine.run()
   } finally {
     stopAsking?.()
+    await following?.stop()
     await removePath(p.paths.pid)
   }
 }

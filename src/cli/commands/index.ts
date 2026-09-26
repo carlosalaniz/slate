@@ -8,6 +8,7 @@ import { requireProject, requireJob, isEngineAlive } from "../context.ts"
 import { select, input, optionalNumber, spin, answered, logLine } from "../prompt.ts"
 import { answerInline, pickAnswer, deliverAnswer, isValidAnswer } from "../questions.ts"
 import { activityLines, type ActivityFile } from "../../opencode/activity.ts"
+import { followJob, LogView } from "../logview.ts"
 import { loadCatalog, defaultTiers, type CatalogModel } from "../../opencode/catalog.ts"
 import { runDiscovery, readDiscovery, writeDiscovery, checkDiscovery, discoveryFiles, type DiscoveryCheck, type DiscoveryMode } from "../discovery.ts"
 import { ProjectConfigSchema, saveProjectConfig, loadProjectConfig, type ProjectConfig } from "../../config/project.ts"
@@ -398,19 +399,17 @@ Fails when no job exists.`,
 
 async function attach(paths: ReturnType<typeof projectPaths>, pid: number, out: Output): Promise<number> {
   out.line(`attached to engine pid ${pid}; Ctrl-C detaches (the job keeps running)`)
-  let seen = (await AuditLog.read(paths.log)).length
   let detached = false
   const stopAsking = process.stdin.isTTY && !out.json ? answerInline(paths) : undefined
+  const following = out.json ? undefined : followJob(paths)
   process.once("SIGINT", () => {
     detached = true
   })
   while (!detached) {
-    const records = await AuditLog.read(paths.log)
-    for (const r of records.slice(seen)) if (!out.json) logLine(formatAudit(r.at, r.event))
-    seen = records.length
     const alive = await isEngineAlive(paths)
     if (!alive) {
       stopAsking?.()
+      await following?.stop()
       const st = await StateStore.read(paths.state)
       if (st) out.emit(() => summary(st), { job: st.job, status: st.status, phase: st.phase })
       return 0
@@ -418,6 +417,7 @@ async function attach(paths: ReturnType<typeof projectPaths>, pid: number, out: 
     await sleep(1000)
   }
   stopAsking?.()
+  await following?.stop()
   out.line("detached")
   return 0
 }
@@ -558,60 +558,17 @@ Decisions and reasoning per task: consults, verdicts, gate outcomes, retries, lo
     const tail = num(flags, "tail")
     let selected = records.filter((r) => {
       const t = r.event.type
-      if (!["consult", "verdict", "gate", "infra.retry", "contract.failed", "loop.round", "loop.exhausted", "question.open", "question.answered", "step.end", "budget", "job", "plan.revise", "loop.iteration"].includes(t)) return false
+      if (!["step.start", "consult", "verdict", "gate", "infra.retry", "contract.failed", "loop.round", "loop.exhausted", "question.open", "question.answered", "step.end", "budget", "job", "plan.revise", "loop.iteration", "script"].includes(t)) return false
       if (!filter) return true
       const s = JSON.stringify(r.event)
       return s.includes(`"${filter}"`) || s.includes(`/${filter}`) || s.includes(`:${filter}`) || s.includes(`${filter}/`) || s.includes(filter)
     })
     if (tail) selected = selected.slice(-tail)
-    out.emit(() => selected.map((r) => formatAudit(r.at, r.event)), { records: selected })
+    // Agent-first, like the live view; every record teaches it who runs which step.
+    out.emit(() => new LogView().events(records, new Set(selected)), { records: selected })
     return 0
   },
 )
-
-function formatAudit(at: string, e: import("../../engine/types.ts").AuditEvent): string {
-  const t = at.slice(11, 19)
-  switch (e.type) {
-    case "step.start":
-      return `${t}  start   ${e.key}${e.agent ? ` (${e.agent})` : ""}`
-    case "step.end":
-      return `${t}  ${e.status.padEnd(7)} ${e.key}${e.cost !== undefined ? ` ${usd(e.cost)}` : ""}${e.reason ? ` — ${e.reason}` : ""}`
-    case "verdict":
-      return `${t}  verdict ${e.key}: ${e.verdict} (${e.file})`
-    case "consult":
-      return `${t}  consult ${e.key} asked ${e.consultant} #${e.n}: verdict ${e.verdict} -> ${e.file}`
-    case "gate":
-      return `${t}  gate    ${e.key}: ${e.action} ${e.resource} -> ${e.decision}${e.reviewers.length ? ` [${e.reviewers.map((r) => `${r.id}:${r.decision}`).join(", ")}]` : ""}`
-    case "infra.retry":
-      return `${t}  retry   ${e.key} attempt ${e.attempt}: ${e.error}`
-    case "contract.failed":
-      return `${t}  contract ${e.key}: ${e.reason}${e.reprompt ? " (re-prompting)" : ""}`
-    case "loop.exhausted":
-      return `${t}  out of rounds ${e.key} -> ${e.policy}`
-    case "loop.iteration":
-      return `${t}  iterate ${e.key} #${e.iteration + 1} = ${e.value}`
-    case "loop.round":
-      return `${t}  round   ${e.key} ${e.round}/${e.max}`
-    case "question.open":
-      return `${t}  ask     [${e.id}] ${e.kind} (${e.branch}): ${e.prompt.slice(0, 100)}`
-    case "question.answered":
-      return `${t}  answer  [${e.id}] ${e.answer}${e.message ? ` — ${e.message}` : ""}`
-    case "budget":
-      return `${t}  budget  ${e.scope}: ${usd(e.spent)} of ${usd(e.cap)} -> stopped`
-    case "job":
-      return `${t}  job     ${e.status}${e.phase ? ` ${e.phase}` : ""}${e.reason ? ` — ${e.reason}` : ""}`
-    case "plan.revise":
-      return `${t}  plan    revise: ${e.note}`
-    case "script":
-      return `${t}  script  ${e.key} ${e.script} ${e.ok ? "ok" : `BROKEN ${e.error}`}`
-    case "worktree":
-      return `${t}  worktree ${e.action} ${e.directory}`
-    case "session":
-      return `${t}  session ${e.key} ${e.sessionID} ${e.agent} ${e.model}`
-    default:
-      return `${t}  ${(e as { type: string }).type}`
-  }
-}
 
 /* ---------------------------------------------------------------------- plan */
 
@@ -768,4 +725,4 @@ function nextAction(st: JobState, pid?: number | null): string | undefined {
   return undefined
 }
 
-export { formatAudit, removePath }
+export { removePath }

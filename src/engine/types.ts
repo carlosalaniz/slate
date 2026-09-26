@@ -173,7 +173,7 @@ export type AuditEvent =
   | { type: "loop.round"; key: string; loop: string; round: number; max: number }
   | { type: "loop.iteration"; key: string; loop: string; iteration: number; value: string }
   | { type: "loop.exhausted"; key: string; loop: string; policy: string }
-  | { type: "question.open"; id: string; kind: string; branch: string; prompt: string }
+  | { type: "question.open"; id: string; kind: string; branch: string; prompt: string; key?: string }
   | { type: "question.answered"; id: string; answer: string; message?: string }
   | { type: "budget"; scope: string; spent: number; cap: number }
   | { type: "job"; status: string; phase?: Phase; reason?: string }

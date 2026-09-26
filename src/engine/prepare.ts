@@ -106,8 +106,11 @@ export async function scopeFromFile(ref: string, directory: string): Promise<str
 
 export function permissionRules(agent: AgentSpec, scope: string[], step: SkillStep): PermissionRule[] {
   // Broad rules first, specific rules last: OpenCode evaluates the ruleset with the last matching rule winning.
-  // Reading never changes anything, so no agent has to ask for it.
-  const rules: PermissionRule[] = [{ action: "read", resource: "*", effect: "allow" }, { action: "subagent", resource: "*", effect: "deny" }]
+  // Reading and searching never change anything, so no agent has to ask for them.
+  const rules: PermissionRule[] = [
+    ...["read", "glob", "grep", "list"].map((action): PermissionRule => ({ action, resource: "*", effect: "allow" })),
+    { action: "subagent", resource: "*", effect: "deny" },
+  ]
   rules.push({ action: "consult", resource: "*", effect: step.consult ? "allow" : "deny" })
   if (agent.role === "consultant") rules.push({ action: "edit", resource: "*", effect: "deny" }, { action: "shell", resource: "*", effect: "deny" })
   if (scope.length) {

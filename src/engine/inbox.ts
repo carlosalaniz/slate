@@ -40,7 +40,7 @@ export async function openQuestion(engine: Engine, input: OpenQuestionInput): Pr
     touchBranch(s, q.branch, { status: "blocked", blockedOn: q.id })
     syncJobStatus(s)
   })
-  engine.o.audit.append({ type: "question.open", id: q.id, kind: q.kind, branch: q.branch, prompt: q.prompt })
+  engine.o.audit.append({ type: "question.open", id: q.id, kind: q.kind, branch: q.branch, prompt: q.prompt, key: q.stepKey })
   if (autoAnswer !== undefined && (engine.o.autoApprove || autoBy)) {
     engine.log(`? ${q.prompt}\n  -> ${autoAnswer} (${autoBy ?? "auto-approve"})`)
     await answerQuestion(engine, q.id, autoAnswer, autoMessage, autoBy ?? "human")
