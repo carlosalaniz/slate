@@ -41,9 +41,9 @@ export async function runSkill(engine: Engine, step: SkillStep, ctx: Ctx, agent:
   engine.log(`> ${key} (${agent.id}, ${modelName(model)})`)
 
   const scope = await resolveScope(engine, step, agent, ctx)
-  const permissions = permissionRules(agent, scope, step)
+  const permissions = permissionRules(agent, scope, step, step.writes.map((w) => resolveRuntime(w, vars)))
   const files = await resolveReads(skill.reads, ctx.directory, vars)
-  const prompt = composePrompt(engine, step, ctx, skill, scope, vars)
+  const prompt = composePrompt(engine, step, ctx, skill, scope, vars, agent)
   const abort = new AbortController()
   engine.running.set(key, { abort, branch: ctx.branch })
 

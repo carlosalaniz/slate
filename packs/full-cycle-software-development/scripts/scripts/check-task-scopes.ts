@@ -1,7 +1,8 @@
 /**
  * Fails when a story's tasks are misnamed, have no scope, a scope reaches into the pack's own
- * folders or covers the whole project, or two tasks may modify the same files. The builder can edit
- * exactly its task's scope, so this is what keeps it out of specs, stories and task reports.
+ * folders or covers the whole project, or two tasks may modify the same files. A scope tells the
+ * builder which files its task owns; the builder's `scope.protect` is what keeps it out of the
+ * pack's documents.
  */
 import { checkYaml, reply, broken, type TaskList } from "./lib.ts"
 

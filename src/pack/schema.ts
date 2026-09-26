@@ -22,6 +22,8 @@ export type ExhaustedPolicy = z.infer<typeof ExhaustedPolicy>
 export const ScopeSchema = z.object({
   modify: z.array(z.string()).optional(),
   read: z.array(z.string()).optional(),
+  /** Never editable, whatever `modify` and the agent's permissions allow; a step's own `writes` still are. */
+  protect: z.array(z.string()).optional(),
 })
 export type Scope = z.infer<typeof ScopeSchema>
 

@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { parseReviewerVerdict, parseVerdictLine, agentPermissionRules, reviewerPrompt, consultToolText } from "../src/opencode/plugin.ts"
 import { loadCorePack } from "../src/engine/core-pack.ts"
-import { READ_ONLY_RULES } from "../src/engine/prepare.ts"
+import { READ_ONLY_RULES, permissionRules } from "../src/engine/prepare.ts"
+import { loadPack } from "../src/pack/loader.ts"
+import { referencePackDir } from "./helpers.ts"
+import type { PermissionRule } from "../src/pack/schema.ts"
 import { parseArgs, str, bool, num } from "../src/cli/args.ts"
 
 describe("plugin helpers", () => {
@@ -64,12 +67,27 @@ describe("args", () => {
   })
 })
 
+// OpenCode's evaluation: the last rule matching the action and resource wins; nothing matching asks.
+const evaluate = (rules: PermissionRule[], action: string, resource: string) => {
+  const glob = (p: string) => new RegExp("^" + p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\/?/g, "\u0000").replace(/\*/g, action === "edit" ? "[^/]*" : ".*").replace(/\u0000/g, ".*") + "$", "s")
+  return rules.findLast((r) => (r.action === action || r.action === "*") && glob(r.resource).test(resource))?.effect ?? "ask"
+}
+
+describe("developer agents", () => {
+  test("the builder may edit the project and run anything, but not the pack's documents", async () => {
+    const pack = await loadPack(referencePackDir())
+    const step = { id: "build", type: "skill", skill: "work-on-task", by: "builder", writes: [] } as never
+    const rules = permissionRules(pack.agents.builder!, ["**"], step, ["tasks/s1-t1/design-1/build-1.md"])
+    for (const f of ["src/lib/i18n.ts", "public/audio/AUDIO_MANIFEST.json", "index.html", "tasks/s1-t1/design-1/build-1.md"]) expect(evaluate(rules, "edit", f)).toBe("allow")
+    for (const f of ["specs/tech-spec.md", "stories/s1/tasks.yaml", "tasks/s1-t1/design-1/verdict-1.md", ".slate/state.json"]) expect(evaluate(rules, "edit", f)).toBe("deny")
+    expect(evaluate(rules, "shell", "npm test")).toBe("allow")
+    expect(evaluate(rules, "shell", "cat > /repo/specs/tech-spec.md << 'EOF'")).toBe("deny")
+    expect(evaluate(rules, "shell", "cat > tasks/s1-t1/notes.md")).toBe("deny")
+  })
+})
+
 describe("read-only shell commands", () => {
-  // OpenCode's evaluation: the last rule matching the action and resource wins; nothing matching asks.
-  const effect = (command: string) => {
-    const glob = (p: string) => new RegExp("^" + p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$", "s")
-    return READ_ONLY_RULES.findLast((r) => r.action === "shell" && glob(r.resource).test(command))?.effect ?? "ask"
-  }
+  const effect = (command: string) => evaluate(READ_ONLY_RULES, "shell", command)
 
   test("looking around goes through", () => {
     for (const c of ["wc -l stories/s2/TDD.md", "ls", "grep '^## ' stories/s2/TDD.md", "find src -type f", "git log --oneline -20", "which ffmpeg 2>/dev/null", "cat x 2>&1"])

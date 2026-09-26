@@ -62,18 +62,8 @@ export function resolveAgentAndSkill(engine: Engine, step: SkillStep): { agent?:
 
 /* ------------------------------------------------------------------ step */
 
-/**
- * Step scope narrows the agent scope; never widens it. The step's own `writes` stay editable either
- * way: a task scope from tasks.yaml lists code files, not the build report the step must write.
- */
+/** Step scope narrows the agent scope; never widens it. */
 export async function resolveScope(engine: Engine, step: SkillStep, agent: AgentSpec, ctx: Ctx): Promise<string[]> {
-  const scope = await narrowScope(engine, step, agent, ctx)
-  if (!scope.length) return scope
-  const writes = step.writes.map((w) => resolveRuntime(w, ctx.vars)).filter((w) => !scope.includes(w))
-  return [...scope, ...writes]
-}
-
-async function narrowScope(engine: Engine, step: SkillStep, agent: AgentSpec, ctx: Ctx): Promise<string[]> {
   const vars = ctx.vars
   let globs: string[] | undefined
   if (step.scope?.from) globs = await scopeFromFile(resolveRuntime(step.scope.from, vars), ctx.directory)
@@ -140,7 +130,22 @@ function readOnlyShellRules(): PermissionRule[] {
   ]
 }
 
-export function permissionRules(agent: AgentSpec, scope: string[], step: SkillStep): PermissionRule[] {
+/**
+ * Edits (and shell redirects) into an agent's `scope.protect` are denied. They come after the agent's
+ * own permissions, so a permissive `shell: *` or `modify: **` cannot reopen them.
+ */
+export function protectRules(agent: AgentSpec): PermissionRule[] {
+  return (agent.scope.protect ?? []).flatMap((g): PermissionRule[] => {
+    const dir = g.replace(/\*\*?$/, "")
+    return [{ action: "edit", resource: g, effect: "deny" }, { action: "shell", resource: `*>*${dir}*`, effect: "deny" }]
+  })
+}
+
+/**
+ * `writes` are the step's output contract: resolved for this run, editable whatever scope and
+ * protect say (a task scope lists code files, not the build report the step must write).
+ */
+export function permissionRules(agent: AgentSpec, scope: string[], step: SkillStep, writes: string[] = []): PermissionRule[] {
   // Broad rules first, specific rules last: OpenCode evaluates the ruleset with the last matching rule winning.
   const rules: PermissionRule[] = [...READ_ONLY_RULES, { action: "subagent", resource: "*", effect: "deny" }]
   rules.push({ action: "consult", resource: "*", effect: step.consult ? "allow" : "deny" })
@@ -149,7 +154,8 @@ export function permissionRules(agent: AgentSpec, scope: string[], step: SkillSt
     rules.push({ action: "edit", resource: "*", effect: "deny" })
     for (const g of scope) rules.push({ action: "edit", resource: g, effect: "allow" })
   }
-  rules.push(...agent.permissions)
+  rules.push(...agent.permissions, ...protectRules(agent))
+  for (const w of writes) rules.push({ action: "edit", resource: w, effect: "allow" })
   for (const g of step.gates ?? []) rules.push({ action: g.on.action, resource: g.on.resource, effect: "ask" })
   return rules
 }
@@ -167,7 +173,7 @@ export async function resolveReads(reads: string[], directory: string, vars: Rec
 }
 
 /** The step prompt: slate-core `prompts/step.md` around the skill prompt. */
-export function composePrompt(engine: Engine, step: SkillStep, ctx: Ctx, skill: { prompt: string }, scope: string[], vars: Record<string, string>): string {
+export function composePrompt(engine: Engine, step: SkillStep, ctx: Ctx, skill: { prompt: string }, scope: string[], vars: Record<string, string>, agent?: AgentSpec): string {
   const loops = [...ctx.untilStack].reverse()
   return renderPrompt(engine.core!, "step", {
     step: step.id,
@@ -177,7 +183,9 @@ export function composePrompt(engine: Engine, step: SkillStep, ctx: Ctx, skill: 
     task: vars.task,
     loops: loops.map((f) => `'${f.id}' round ${f.round} of ${f.max}`).join(", "),
     retried_loops: loops.filter((f) => f.round > 1).map((f) => `'${f.id}'`).join(", "),
-    scope: scope.join(", "),
+    // `**` restricts nothing, so the scope line is left out.
+    scope: scope.includes("**") ? "" : scope.join(", "),
+    protected: (agent?.scope.protect ?? []).join(", "),
     writes: step.writes.map((w) => resolveRuntime(w, vars)).join(", "),
     result_file: step.result ? resolveRuntime(step.result.file, vars) : "",
     result_field: step.result?.field ?? "",

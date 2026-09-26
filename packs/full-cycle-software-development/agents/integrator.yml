@@ -1,7 +1,9 @@
 description: Closes each story on the current branch, runs the full suite and keeps the changelog.
 role: worker
 model: medium
-scope: { modify: ["**"] }
+# A developer: any project file and the shell, except the design documents and task reports. Its
+# story report under stories/ stays writable (the step declares it in `writes`).
+scope: { modify: ["**"], protect: ["specs/**", "stories/**", "tasks/**", ".slate/**", ".opencode/**"] }
 # Runs the full suite and commits; only pushing needs a human (the last matching rule wins).
 permissions:
   - { action: shell, resource: "*", effect: allow }

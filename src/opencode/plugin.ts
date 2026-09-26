@@ -8,7 +8,7 @@ import { matcher } from "../util/glob.ts"
 import { parseFrontmatter, stringifyFrontmatter } from "../util/frontmatter.ts"
 import { renderMessage, renderPrompt } from "../engine/core-pack.ts"
 import type { SessionRegistry, SessionEntry } from "./registry.ts"
-import { READ_ONLY_RULES } from "../engine/prepare.ts"
+import { READ_ONLY_RULES, protectRules } from "../engine/prepare.ts"
 
 /**
  * The Slate plugin: everything that only code inside OpenCode can do.
@@ -44,7 +44,7 @@ export function agentPermissionRules(agent: AgentSpec): PermissionRule[] {
     rules.push({ action: "edit", resource: "*", effect: "deny" })
     for (const g of modify) rules.push({ action: "edit", resource: g, effect: "allow" })
   }
-  rules.push(...agent.permissions)
+  rules.push(...agent.permissions, ...protectRules(agent))
   return rules
 }
 
