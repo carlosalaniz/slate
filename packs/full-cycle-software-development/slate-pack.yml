@@ -111,6 +111,8 @@ phases:
                           inputs: ["specs/tech-spec.md"]
                           else: ask-human
                       writes: ["tasks/{task}/design-{round.design}/build-{round}.md"]
+                    # The tests run as a script: a failure goes back to the builder without a checker session.
+                    - { id: tests, type: script, script: run-tests, args: ["{task}", "{round.design}", "{round}"] }
                     - id: verify
                       type: skill
                       skill: verify-task

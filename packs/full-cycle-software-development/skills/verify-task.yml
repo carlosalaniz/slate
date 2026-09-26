@@ -1,12 +1,15 @@
 description: Verify one task and write a strict verdict.
-reads: ["stories/{story}/tasks.yaml", "stories/{story}/TDD.md", "tasks/{task}/design-{round.design}/build-{round}.md", "specs/tech-spec.md"]
+reads: ["stories/{story}/tasks.yaml", "stories/{story}/TDD.md", "tasks/{task}/design-{round.design}/build-{round}.md", "tasks/{task}/design-{round.design}/tests-{round}.md", "specs/tech-spec.md"]
 prompt: |
-  Verify task {task} (round {round}). Run the test command from the tech spec. Check each acceptance
-  item for {task} in `stories/{story}/tasks.yaml` against the code. Write `tasks/{task}/design-{round.design}/verdict-{round}.md`
+  Verify task {task} (round {round}). The full test command already ran after the build and passed:
+  `tasks/{task}/design-{round.design}/tests-{round}.md` has its output, so do not run the whole suite
+  again. Read the task's changes (`git status` and `git diff`; they are not committed yet) and check
+  each acceptance item for {task} in `stories/{story}/tasks.yaml` against the code. Run a single
+  test only when you need it to confirm an item. Write `tasks/{task}/design-{round.design}/verdict-{round}.md`
   starting with:
   ```
   ---
   verdict: fail    # exactly pass or fail
   ---
   ```
-  then the test output summary and, on fail, a numbered list of what must change.
+  then a one-line test summary from the tests file and, on fail, a numbered list of what must change.

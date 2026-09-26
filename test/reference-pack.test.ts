@@ -77,6 +77,70 @@ describe("reference pack end to end (fake runtime)", () => {
   }, 120_000)
 })
 
+describe("tests step", () => {
+  test("failing tests go back to the builder without a checker session", async () => {
+    // The tech spec's test command fails the first time it runs, then passes.
+    const h = await harness({
+      manifest: {},
+      usePackDir: referencePackDir(),
+      config: { config: { max_stories: 5 } },
+      fake: {
+        behaviors: {
+          "tech-spec": {
+            run: async (req) => {
+              await Bun.write(path.join(req.directory, "specs/tech-spec.md"), "test command: `test -f .tests-ok || { touch .tests-ok; echo boom; exit 1; }`\n")
+              return { skipWrites: true }
+            },
+          },
+        },
+      },
+    })
+    const st = await h.engine.run()
+    expect(st.status).toBe("done")
+    const bv = "build/story-loop[0]/design{1}/task-loop[0]/build-verify"
+    expect(st.steps[`${bv}{1}/tests`]!.status).toBe("failed")
+    expect(st.steps[`${bv}{1}/verify`]).toBeUndefined()
+    expect(st.loops[bv]).toMatchObject({ passed: true, round: 2 })
+    const first = await Bun.file(path.join(h.root, "tasks/s1-t1/design-1/tests-1.md")).text()
+    expect(first).toStartWith("---\nverdict: \"fail\"")
+    expect(first).toContain("boom")
+    expect(await Bun.file(path.join(h.root, "tasks/s1-t1/design-1/tests-2.md")).text()).toStartWith("---\nverdict: \"pass\"")
+    expect(h.runtime.calls.filter((c) => c.key.startsWith(bv)).map((c) => c.key.slice(bv.length))).toEqual(["{1}/build", "{2}/build", "{2}/verify"])
+  }, 120_000)
+})
+
+describe("run-tests", () => {
+  const script = path.join(referencePackDir(), "scripts/scripts/run-tests.ts")
+  const run = (root: string) => {
+    const r = Bun.spawnSync([process.execPath, script, "s1-t1", "1", "1"], { env: { ...process.env, SLATE_WORKSPACE: root } })
+    return { code: r.exitCode, answer: JSON.parse(r.stdout.toString() || "{}") }
+  }
+  const record = (root: string) => Bun.file(path.join(root, "tasks/s1-t1/design-1/tests-1.md")).text()
+
+  test("no test command yet passes with a note", async () => {
+    const root = await tmpProject()
+    await Bun.write(path.join(root, "package.json"), JSON.stringify({ name: "x", scripts: {} }))
+    expect(run(root)).toMatchObject({ code: 0, answer: { ok: true, note: "no test command" } })
+    expect(await record(root)).toContain('command: "none"')
+  })
+
+  test("a failing command is a failed check with the output recorded", async () => {
+    const root = await tmpProject()
+    await Bun.write(path.join(root, "specs/tech-spec.md"), "Test command: `echo expected 2 got 3; exit 4`\n")
+    expect(run(root)).toMatchObject({ code: 0, answer: { ok: false, reason: "tests failed (exit 4); output in tasks/s1-t1/design-1/tests-1.md" } })
+    const text = await record(root)
+    expect(text).toContain("exit: 4")
+    expect(text).toContain("expected 2 got 3")
+  })
+
+  test("npm test is the fallback when package.json has a test script", async () => {
+    const root = await tmpProject()
+    await Bun.write(path.join(root, "package.json"), JSON.stringify({ name: "x", scripts: { test: "echo all good" } }))
+    expect(run(root)).toMatchObject({ code: 0, answer: { ok: true, pass: true } })
+    expect(await record(root)).toContain("all good")
+  })
+})
+
 describe("commit-task", () => {
   const script = path.join(referencePackDir(), "scripts/scripts/commit-task.ts")
   const run = (root: string) => {

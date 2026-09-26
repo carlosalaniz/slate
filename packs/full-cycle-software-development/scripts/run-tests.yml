@@ -1,3 +1,3 @@
-description: Runs the project's test command from specs/tech-spec.md (falls back to npm test).
+description: Runs the project's tests after a build and records them in tasks/<task>/design-<n>/tests-<round>.md; a failure goes back to the builder.
 run: "bun $SLATE_PACK/scripts/scripts/run-tests.ts"
 timeout: 10m
