@@ -59,7 +59,7 @@ runtime:
   step_timeout_minutes: 90    # how long one agent step may run before it is interrupted
   infra_retries: 3            # provider/infra failures retried before the job stops
   contract_reprompts: 1       # times a step is re-prompted when its output contract is missed
-  worktrees: git              # git | copy | none — isolation for `as: task` build steps
+  worktrees: git              # git | copy | none — worktrees for loops that ask for them; none runs everything in place
 
 # Pack-specific config. These override the pack's own defaults and fill `${config}`
 # placeholders in the pack. The keys below are the reference pack's; your pack may differ.
@@ -71,7 +71,8 @@ config:
   max_designs: 2              # design + redesigns per story
   max_stories: 50
   max_tasks_per_story: 20
-  story_concurrency: 1        # stories built in parallel
+  max_close_rounds: 3         # rounds to land a story (merge in other stories, resolve, land)
+  story_concurrency: 2        # stories built in parallel, each in its own git worktree (1 without git)
 # ---------------------------------------------------------------------------------------------
 # .slate_defaults.yml (separate file): answers for `slate init`, so trying Slate out does not mean
 # answering the same prompts every time. Put it in the project directory, any parent, or your home

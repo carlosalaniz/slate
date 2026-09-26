@@ -14,6 +14,7 @@ import type {
 } from "../engine/types.ts"
 import { EMPTY_TOKENS } from "../engine/types.ts"
 import { ensureDir, copyDir, removePath, isDir } from "../util/fs.ts"
+import { addWorktree, isGitRoot, removeWorktree } from "../util/git.ts"
 import { SessionRegistry } from "./registry.ts"
 import { createSlatePlugin, lastAssistantText } from "./plugin.ts"
 import { shareOpenCodeKeys } from "./credentials.ts"
@@ -339,14 +340,15 @@ export class OpenCodeRuntime implements Runtime {
       const dir = path.join(this.job.root, ".slate", "worktrees", req.name)
       if (strategy === "none") return { directory: req.sourceDirectory }
       if (await isDir(dir)) return { directory: dir }
-      if (strategy === "git" && (await isDir(path.join(req.sourceDirectory, ".git")))) {
-        // Plain git, not OpenCode's worktree API: that one nests the checkout one level down
-        // (<dir>/<name>) on a detached HEAD, so there is no `slate/<name>` branch to merge.
-        const branch = `slate/${req.name}`
-        const proc = Bun.spawn(["git", "worktree", "add", "-B", branch, dir], { cwd: req.sourceDirectory, stdout: "pipe", stderr: "pipe" })
-        const code = await proc.exited
-        if (code === 0) return { directory: dir }
-        this.log(`[worktree] git worktree add failed (${code}): ${await new Response(proc.stderr).text()}`)
+      const git = await isGitRoot(req.sourceDirectory)
+      if (strategy === "git" && git) {
+        const error = await addWorktree(req.sourceDirectory, dir, req.name)
+        if (!error) return { directory: dir }
+        this.log(`[worktree] ${error}`)
+      }
+      if (req.gitOnly) {
+        if (git) this.log(`[worktree] ${req.name} runs in the project itself`)
+        return { directory: req.sourceDirectory }
       }
       await copyDir(req.sourceDirectory, dir)
       await removePath(path.join(dir, ".slate"))
@@ -354,8 +356,7 @@ export class OpenCodeRuntime implements Runtime {
     },
     remove: async (directory: string): Promise<void> => {
       if (!directory.includes(path.join(".slate", "worktrees"))) return
-      const proc = Bun.spawn(["git", "worktree", "remove", "--force", directory], { cwd: this.job.root, stdout: "pipe", stderr: "pipe" })
-      if ((await proc.exited) !== 0) await removePath(directory)
+      await removeWorktree(this.job.root, directory)
     },
   }
 }

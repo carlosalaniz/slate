@@ -1,4 +1,4 @@
-description: Closes each story on the current branch, runs the full suite and keeps the changelog.
+description: Closes each story on its branch, resolves merge conflicts with other stories and runs the full suite.
 role: worker
 model: medium
 # A developer: any project file and the shell, except the design documents and task reports. Its
@@ -9,6 +9,6 @@ permissions:
   - { action: shell, resource: "*", effect: allow }
   - { action: shell, resource: "git push *", effect: ask }
 prompt: |
-  You are the integrator. Tasks were built in place and committed one by one on the current branch.
-  You close each story: run the full test suite, update CHANGELOG.md, write the story report and
-  commit it. You never push and never rewrite history.
+  You are the integrator. Each story is built on its own branch, its tasks committed one by one.
+  You close a story: resolve conflicts with stories that landed before it, run the full test suite,
+  write the story report and commit it. You never push and never rewrite history.

@@ -1,8 +1,9 @@
 import path from "node:path"
 import type { Runtime, JobContext, RunStepRequest, RunStepResult, RepromptRequest, ReviewRequest, QuestionReply, WorktreeRequest, ModelRef } from "../engine/types.ts"
 import { resolveRuntime } from "../engine/vars.ts"
-import { writeText, ensureDir, copyDir, removePath } from "../util/fs.ts"
+import { writeText, ensureDir, copyDir, removePath, isDir } from "../util/fs.ts"
 import { stringifyFrontmatter } from "../util/frontmatter.ts"
+import { addWorktree, isGitRoot, removeWorktree } from "../util/git.ts"
 
 export interface FakeBehavior {
   /** Return true to skip the default contract-satisfying writes (simulates a silent no-op). */
@@ -112,6 +113,14 @@ export class FakeRuntime implements Runtime {
   worktree = {
     create: async (req: WorktreeRequest): Promise<{ directory: string }> => {
       const dir = path.join(this.job.root, ".slate", "worktrees", req.name)
+      // Real git worktrees when the step needs a branch to merge, as in the OpenCode runtime.
+      if (req.gitOnly) {
+        if (!(await isGitRoot(req.sourceDirectory))) return { directory: req.sourceDirectory }
+        if (await isDir(dir)) return { directory: dir }
+        const error = await addWorktree(req.sourceDirectory, dir, req.name)
+        if (error) throw new Error(error)
+        return { directory: dir }
+      }
       await ensureDir(dir)
       if ((this.opts.worktrees ?? "copy") === "copy") {
         await copyDir(req.sourceDirectory, dir)
@@ -120,7 +129,8 @@ export class FakeRuntime implements Runtime {
       return { directory: dir }
     },
     remove: async (directory: string): Promise<void> => {
-      await removePath(directory)
+      if (await isGitRoot(this.job.root)) await removeWorktree(this.job.root, directory)
+      else await removePath(directory)
     },
   }
 }

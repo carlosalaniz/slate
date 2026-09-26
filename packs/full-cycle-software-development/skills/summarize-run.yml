@@ -3,3 +3,5 @@ reads: ["stories/index.yaml", "stories/*/merged.md", "CHANGELOG.md", ".slate/bri
 prompt: |
   Write `RUN-SUMMARY.md`: what was built against the brief, story by story; how to run it and its
   tests; what was skipped or left open; and the assumptions made along the way.
+  Then add this run to `CHANGELOG.md` (create it if missing, newest entry first): one entry built
+  from the "Changelog" section of every `stories/*/merged.md`.

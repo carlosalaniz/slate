@@ -1,8 +1,13 @@
-description: Close the story on the current branch, run all tests, record it.
-reads: ["stories/{story}/tasks.yaml", "specs/tech-spec.md", "CHANGELOG.md"]
+description: Close the story on its branch, run all tests, record it.
+reads: ["stories/{story}/tasks.yaml", "specs/tech-spec.md"]
 prompt: |
-  Close story {story}. Its tasks were built in place and each verified task is already a commit on
-  the current branch (`git log --oneline` shows "<task-id>: <title>"). Run the full test command and
-  fix nothing yourself: report failures. Update `CHANGELOG.md`. Write `stories/{story}/merged.md`
-  with the story's commits, the test result and anything left undone, then commit those two files as
-  "{story}: done". Do not push and do not rewrite history.
+  Close story {story}. Its tasks were built on this branch and each verified task is already a
+  commit (`git log --oneline` shows "<task-id>: <title>"). Other stories may have landed meanwhile and
+  been merged into this branch just now. If `git status` shows unmerged paths, resolve every
+  conflict first, keeping the intent of both sides (read the other story's commits with `git log`
+  and `git show`), then `git add` the files and `git commit --no-edit`.
+  Run the full test command and fix nothing else yourself: report failures. Write
+  `stories/{story}/merged.md` with the story's commits, the conflicts you resolved (if any), the test
+  result, anything left undone, and a "Changelog" section of one to three user-facing lines. Commit
+  it as "{story}: done", leaving the working tree clean. Do not touch CHANGELOG.md, do not push and
+  do not rewrite history.

@@ -13,9 +13,9 @@ describe("pack loader", () => {
     if (r.ok) {
       expect(Object.keys(r.pack.agents).sort()).toEqual(["analyst", "architect", "builder", "checker", "discovery-lead", "integrator", "product-owner", "product-owner-consultant", "reviewer", "staff-engineer", "uiux-designer"])
       expect(Object.keys(r.pack.skills)).toHaveLength(12)
-      const loop = r.pack.manifest.phases.build[0]!
+      const loop = r.pack.manifest.phases.build.find((s) => s.id === "story-loop")!
       expect(loop.type).toBe("loop")
-      if (loop.type === "loop") expect(loop.max).toBe(50)
+      if (loop.type === "loop") expect(loop).toMatchObject({ max: 50, concurrency: 2, worktree: "git" })
     }
   })
 

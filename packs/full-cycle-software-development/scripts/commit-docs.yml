@@ -1,0 +1,3 @@
+description: Commits what the pack's agents wrote outside a story (specs and plan before the build, the run summary at the end).
+run: "bun $SLATE_PACK/scripts/scripts/commit-docs.ts"
+timeout: 60s

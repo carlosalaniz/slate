@@ -6,8 +6,27 @@
 import fs from "node:fs"
 import path from "node:path"
 
-/** The directory the step runs in: the project root, or a task's worktree. */
+/** The directory the step runs in: the project root, or a story's worktree. */
 export const workspace = process.env.SLATE_WORKSPACE ?? process.cwd()
+/** The project root. A story running in its own worktree has workspace !== root. */
+export const root = process.env.SLATE_VAR_WORKSPACE ?? workspace
+
+/** Runs git in `cwd` (the workspace by default). */
+export function git(args: string[], cwd = workspace): { ok: boolean; out: string; err: string } {
+  const r = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
+  return { ok: r.exitCode === 0, out: r.stdout.toString().trim(), err: r.stderr.toString().trim() }
+}
+
+/** The branch checked out in `cwd`; undefined outside git or on a detached HEAD. */
+export function currentBranch(cwd = workspace): string | undefined {
+  const r = git(["symbolic-ref", "--short", "HEAD"], cwd)
+  return r.ok ? r.out : undefined
+}
+
+/** Files with unresolved merge conflicts in `cwd`. */
+export function conflictedFiles(cwd = workspace): string[] {
+  return git(["diff", "--name-only", "--diff-filter=U"], cwd).out.split("\n").filter(Boolean)
+}
 
 export interface Story {
   id: string | number

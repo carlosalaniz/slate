@@ -17,8 +17,11 @@ config:
   max_designs: 2
   max_stories: 50
   max_tasks_per_story: 20
-  # Tasks edit the project in place and commit to the current branch, so stories run one at a time.
-  story_concurrency: 1
+  # Rounds to land a finished story: merge in what other stories landed, resolve, land.
+  max_close_rounds: 3
+  # Stories whose dependencies are merged build side by side, each in its own git worktree.
+  # Without git they run one at a time in the project itself.
+  story_concurrency: 2
 
 # Live discovery: after the person picks this pack, discovery-lead takes over the conversation and
 # has each specialist draft its document (product scope, UI/UX spec, tech spec) with their answers.
@@ -52,13 +55,18 @@ phases:
             show: ["stories/index.yaml", "stories/graph.yaml"] }
 
   build:
+    # Story worktrees only see committed files, so the specs and the plan are committed first.
+    - { id: commit-plan, type: script, script: commit-docs, args: ["plan: specs and stories"] }
     - id: story-loop
       type: loop
       over: { script: next-ready-story }
       as: story
       max: "${max_stories}"
       concurrency: "${story_concurrency}"
+      # Each story builds on branch slate/<story> in .slate/worktrees/<story> and lands when it closes.
+      worktree: git
       steps:
+        - { id: setup, type: script, script: setup-story }
         # One design round: write and review the TDD, split it into tasks, build every task.
         # A task that runs out of build rounds fails the round, and the next round redesigns.
         - id: design
@@ -86,7 +94,7 @@ phases:
               over: { script: next-task, args: ["{story}"] }
               as: task
               max: "${max_tasks_per_story}"
-              # In place: builder and checker work in the project itself; each verified task is a commit.
+              # In place: builder and checker work in the story's checkout; each verified task is a commit.
               worktree: false
               steps:
                 # Task files live in tasks/<task>/design-<n>/, so a redesign starts clean and keeps history.
@@ -120,15 +128,27 @@ phases:
                       writes: ["tasks/{task}/design-{round.design}/verdict-{round}.md"]
                       result: { file: "tasks/{task}/design-{round.design}/verdict-{round}.md", field: verdict }
                 - { id: commit, type: script, script: commit-task, args: ["{story}", "{task}"] }
-        - id: merge
-          type: skill
-          skill: merge-story
-          by: integrator
-          writes: ["stories/{story}/merged.md"]
-          gates:
-            - { on: { action: shell, resource: "git push*" }, review: [], else: ask-human }
-            - { on: { action: shell, resource: "git reset --hard*" }, review: [], else: ask-human }
-            - { on: { action: shell, resource: "git branch -D*" }, review: [], else: ask-human }
+        # One close round: merge in what other stories landed (conflicts stay for the integrator),
+        # close the story, land it. Another story landing first fails the round, and the next merges again.
+        - id: close
+          type: loop
+          until: all-pass
+          max: "${max_close_rounds}"
+          on_exhausted: "${on_exhausted}"
+          steps:
+            - { id: sync, type: script, script: sync-story }
+            - id: merge
+              type: skill
+              skill: merge-story
+              by: integrator
+              writes: ["stories/{story}/merged.md"]
+              gates:
+                - { on: { action: shell, resource: "git push*" }, review: [], else: ask-human }
+                - { on: { action: shell, resource: "git reset --hard*" }, review: [], else: ask-human }
+                - { on: { action: shell, resource: "git branch -D*" }, review: [], else: ask-human }
+            - { id: land, type: script, script: land-story, args: ["{story}"] }
 
   close:
-    - { id: summarize, type: skill, skill: summarize-run, by: analyst, writes: ["RUN-SUMMARY.md"] }
+    # The changelog is written once here: stories built side by side would all conflict on it.
+    - { id: summarize, type: skill, skill: summarize-run, by: analyst, writes: ["RUN-SUMMARY.md", "CHANGELOG.md"] }
+    - { id: commit-summary, type: script, script: commit-docs, args: ["run summary and changelog"] }

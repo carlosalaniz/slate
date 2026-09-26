@@ -115,8 +115,11 @@ while step := manifest.next(state):
 * **Resume never replays a partial step.** A step is recorded only when it finishes; on `continue` any
   step still marked running is discarded and re-run. Iteration values from `over` scripts are recorded
   so replay does not re-ask the script.
-* **Isolation.** Every `as: task` iteration in build gets its own worktree (git worktree via the SDK,
-  falling back to `git worktree add`, then to a copy). Merge happens in the pack's `merge` step.
+* **Isolation.** A loop's items get their own worktree when the loop says so (`worktree: true`, the
+  default for `as: task` loops in build): a `git worktree add` on branch `slate/<item>`, falling back
+  to a copy. `worktree: git` never copies: without git the items run in the project one at a time,
+  and each item's worktree is removed once it is done. The reference pack builds each story this way
+  and lands it on the project's branch in its `close` loop (merge the branch in, resolve, land).
 
 ## Mapping to OpenCode v2 (verified against `@opencode/sdk` 2.0.15)
 

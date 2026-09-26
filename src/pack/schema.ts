@@ -111,8 +111,11 @@ export type LoopStep = {
   max: number | string
   concurrency?: number | string
   on_exhausted?: ExhaustedPolicy
-  /** Give each iteration its own worktree. Defaults to true for `as: task` loops in build. */
-  worktree?: boolean
+  /**
+   * Give each iteration its own worktree. Defaults to true for `as: task` loops in build. `git`: a git
+   * worktree on branch `slate/<item>`, or the project itself when it is not a git repository.
+   */
+  worktree?: boolean | "git"
   steps: Step[]
 }
 export type Step = z.infer<typeof SkillStepSchema> | z.infer<typeof ScriptStepSchema> | z.infer<typeof ApprovalStepSchema> | LoopStep
@@ -128,7 +131,7 @@ export const LoopStepSchema: z.ZodType<LoopStep> = z.lazy(() =>
       max: NumberOrVar,
       concurrency: NumberOrVar.optional(),
       on_exhausted: ExhaustedPolicy.optional(),
-      worktree: z.boolean().optional(),
+      worktree: z.union([z.boolean(), z.literal("git")]).optional(),
       steps: z.array(StepSchema).min(1),
     })
     .superRefine((v, ctx) => {

@@ -20,7 +20,9 @@ import { tier } from "./prepare.ts"
  *
  * `over` asks a script for the next item and runs the steps once per item, each item on its own
  * branch (and, for tasks in build, its own worktree). When an item fails, no new items start; the
- * running ones finish, and the loop reports the failure upward.
+ * running ones finish, and the loop reports the failure upward. `worktree: git` items that got no
+ * worktree (the project is not a git repository) run one at a time whatever `concurrency` says, and
+ * a `worktree: git` item's worktree is removed once the item is done: its steps merged the branch.
  */
 
 export function runLoop(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqResult> {
@@ -166,7 +168,10 @@ async function runOver(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqRes
   const as = step.as!
   const spec = engine.pack!.scripts[step.over!.script]!
   if (!engine.state.loops[key]) await engine.o.state.update((s) => (s.loops[key] = { key, loop: step.id, kind: "over", iterations: [] }))
-  const wantsWorktree = step.worktree ?? (ctx.phase === "build" && as === "task" && engine.o.project.runtime.worktrees !== "none")
+  const wantsWorktree = engine.o.project.runtime.worktrees !== "none" && (step.worktree ?? (ctx.phase === "build" && as === "task"))
+  const gitOnly = step.worktree === "git"
+  /** `worktree: git` items left in the loop's own directory queue here, so two never edit it at once. */
+  let inPlace: Promise<unknown> = Promise.resolve()
 
   const active = new Map<number, Promise<void>>()
   /** Something was thrown (a stop, a job failure, an engine bug): end the loop and rethrow once running items settle. */
@@ -177,9 +182,18 @@ async function runOver(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqRes
   const runIteration = async (it: LoopIteration) => {
     let directory = ctx.directory
     if (wantsWorktree) {
-      directory = (await engine.o.runtime.worktree.create({ name: it.value.replace(/[^a-zA-Z0-9_.-]/g, "-"), sourceDirectory: ctx.directory })).directory
-      engine.o.audit.append({ type: "worktree", key: `${key}[${it.n}]`, action: "create", directory })
+      directory = (await engine.o.runtime.worktree.create({ name: it.value.replace(/[^a-zA-Z0-9_.-]/g, "-"), sourceDirectory: ctx.directory, gitOnly })).directory
+      if (directory !== ctx.directory) engine.o.audit.append({ type: "worktree", key: `${key}[${it.n}]`, action: "create", directory })
     }
+    if (gitOnly && directory === ctx.directory && concurrency > 1) {
+      // A queued item whose turn comes after a failure never starts; a resume runs it.
+      const turn = inPlace.then(() => (thrown || failure ? setStatus(it, "interrupted") : work(it, directory)))
+      inPlace = turn.catch(() => undefined)
+      return turn
+    }
+    return work(it, directory)
+  }
+  const work = async (it: LoopIteration, directory: string) => {
     // untilStack is kept: an item's failure is a failed round of the loop around this one.
     const inner: Ctx = { ...ctx, prefix: `${key}[${it.n}]`, branch: it.branch, directory, vars: { ...ctx.vars, [as]: it.value, [`${as}_dir`]: directory } }
     await engine.o.state.update((s) => touchBranch(s, it.branch, { status: "idle", story: inner.vars.story }))
@@ -190,13 +204,19 @@ async function runOver(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqRes
       status = res.failed ? "failed" : "done"
       if (res.failed) failure ??= failedAt(`${as} ${it.value}`, `${res.failedStep}: ${res.reason}`)
     } finally {
-      await engine.o.state.update((s) => {
-        const rec = s.loops[key]!.iterations!.find((x) => x.n === it.n)
-        if (rec) rec.status = status
-        touchBranch(s, it.branch, { status: status === "interrupted" ? "idle" : status, current: undefined })
-      })
+      await setStatus(it, status)
+    }
+    if (status === "done" && gitOnly && directory !== ctx.directory) {
+      await engine.o.runtime.worktree.remove(directory)
+      engine.o.audit.append({ type: "worktree", key: `${key}[${it.n}]`, action: "remove", directory })
     }
   }
+  const setStatus = (it: LoopIteration, status: "done" | "failed" | "interrupted") =>
+    engine.o.state.update((s) => {
+      const rec = s.loops[key]!.iterations!.find((x) => x.n === it.n)
+      if (rec) rec.status = status
+      touchBranch(s, it.branch, { status: status === "interrupted" ? "idle" : status, current: undefined })
+    })
   const start = (it: LoopIteration) => {
     const pr = runIteration(it)
       .catch((e: Error) => {

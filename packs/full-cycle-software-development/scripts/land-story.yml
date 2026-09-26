@@ -1,0 +1,3 @@
+description: Merges a closed story's branch into the project's branch, one story at a time.
+run: "bun $SLATE_PACK/scripts/scripts/land-story.ts"
+timeout: 15m

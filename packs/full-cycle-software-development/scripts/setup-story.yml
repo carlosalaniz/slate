@@ -1,0 +1,3 @@
+description: Installs the project's dependencies in a story's worktree (nothing to do when the story runs in the project itself).
+run: "bun $SLATE_PACK/scripts/scripts/setup-story.ts"
+timeout: 15m

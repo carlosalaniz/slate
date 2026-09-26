@@ -133,6 +133,8 @@ export interface ReviewRequest {
 export interface WorktreeRequest {
   name: string
   sourceDirectory: string
+  /** Only a git worktree will do (its branch gets merged): without git, work in the source directory, never a copy. */
+  gitOnly?: boolean
 }
 
 export interface QuestionReply {

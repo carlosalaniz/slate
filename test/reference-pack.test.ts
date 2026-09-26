@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import { existsSync } from "node:fs"
 import { harness, referencePackDir, tmpProject } from "./helpers.ts"
+import { ensureGitignore } from "../src/config/gitignore.ts"
+import type { FakeBehavior } from "../src/opencode/fake.ts"
 
 describe("reference pack end to end (fake runtime)", () => {
   test("runs discovery, plan, build (2 stories x 2 tasks) and close", async () => {
@@ -74,6 +76,104 @@ describe("reference pack end to end (fake runtime)", () => {
     expect(existsSync(path.join(taskDir("s1-t1"), "design-2", "verdict-1.md"))).toBe(true)
     expect(existsSync(path.join(h.root, "stories/s1/merged.md"))).toBe(true)
     expect(existsSync(path.join(h.root, "stories/s2/merged.md"))).toBe(true)
+  }, 120_000)
+})
+
+describe("parallel stories (git)", () => {
+  const git = (cwd: string, ...args: string[]) => Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
+  const out = (cwd: string, ...args: string[]) => git(cwd, ...args).stdout.toString().trim()
+  const write = (file: string, text: string) => Bun.write(file, text)
+
+  /** s1 and s2 are independent; s3 needs both. */
+  const plan: Record<string, FakeBehavior> = {
+    stories: {
+      run: async (req) => {
+        await write(path.join(req.directory, "stories/index.yaml"), "stories:\n  - id: s1\n  - id: s2\n  - id: s3\n    depends_on: [s1, s2]\n")
+        return { skipWrites: true }
+      },
+    },
+    "story-graph": {
+      run: async (req) => {
+        await write(path.join(req.directory, "stories/graph.yaml"), "nodes:\n  s1: []\n  s2: []\n  s3: [s1, s2]\n")
+        return { skipWrites: true }
+      },
+    },
+  }
+  /** The integrator: resolves a conflicted NOTES.md by keeping both sides, writes its report, commits. */
+  const integrator: FakeBehavior = {
+    run: async (req) => {
+      const dir = req.directory
+      if (out(dir, "diff", "--name-only", "--diff-filter=U").includes("NOTES.md")) {
+        const sides = (await Bun.file(path.join(dir, "NOTES.md")).text()).split("\n").filter((l) => /^s\d/.test(l))
+        await write(path.join(dir, "NOTES.md"), sides.sort().join("\n") + "\n")
+        git(dir, "add", "NOTES.md")
+        git(dir, "commit", "--no-edit")
+      }
+      await write(path.join(dir, `stories/${req.vars.story}/merged.md`), `# ${req.vars.story} merged\n`)
+      git(dir, "add", "-A")
+      git(dir, "commit", "-m", `${req.vars.story}: done`)
+      return { skipWrites: true }
+    },
+  }
+
+  async function gitHarness(behaviors: Record<string, FakeBehavior>) {
+    const h = await harness({
+      manifest: {},
+      usePackDir: referencePackDir(),
+      config: { config: { max_stories: 5 }, runtime: { worktrees: "git", step_timeout_minutes: 1, infra_retries: 1, contract_reprompts: 1 } },
+      fake: { delayMs: 15, behaviors: { ...plan, merge: integrator, ...behaviors } },
+    })
+    await ensureGitignore(h.root)
+    git(h.root, "init", "-q", "-b", "main")
+    git(h.root, "config", "user.email", "t@t")
+    git(h.root, "config", "user.name", "t")
+    return h
+  }
+
+  test("independent stories build side by side in their own worktrees and land on the branch", async () => {
+    const h = await gitHarness({
+      build: {
+        run: async (req) => {
+          await write(path.join(req.directory, `src/${req.vars.story}.ts`), `export const story = "${req.vars.story}"\n`)
+          return {}
+        },
+      },
+    })
+    const st = await h.engine.run()
+    expect(st.status).toBe("done")
+    // s1 and s2 overlapped: s2 started building before s1 landed
+    const at = (pred: (c: (typeof h.runtime.calls)[number]) => boolean) => h.runtime.calls.findIndex(pred)
+    const s1 = "build/story-loop[0]/"
+    const s2 = "build/story-loop[1]/"
+    expect(at((c) => c.key.startsWith(s2))).toBeLessThan(at((c) => c.key.startsWith(s1) && c.step === "merge"))
+    // each story worked in its own worktree, which is gone once it landed
+    const dirs = new Set(h.runtime.calls.filter((c) => c.step === "build").map((c) => c.directory))
+    expect([...dirs].sort()).toEqual(["s1", "s2", "s3"].map((s) => path.join(h.root, ".slate", "worktrees", s)))
+    for (const d of dirs) expect(existsSync(d)).toBe(false)
+    // everything landed on main, merges included; s3 was built on top of s1 and s2
+    expect(out(h.root, "branch", "--show-current")).toBe("main")
+    expect(out(h.root, "log", "--format=%s")).toContain("Merge story s3")
+    for (const f of ["src/s1.ts", "src/s2.ts", "src/s3.ts", "stories/s1/merged.md", "stories/s3/merged.md", "tasks/s3-t2/design-1/tests-1.md"]) expect(existsSync(path.join(h.root, f))).toBe(true)
+    expect(out(h.root, "log", "-1", "--format=%s", "--", "specs/tech-spec.md")).toBe("plan: specs and stories")
+    expect(out(h.root, "branch", "--list", "slate/*")).toBe("")
+    expect(out(h.root, "status", "--porcelain")).toBe("")
+  }, 120_000)
+
+  test("a story that conflicts with one that landed first is merged, resolved and landed", async () => {
+    const h = await gitHarness({
+      build: {
+        run: async (req) => {
+          if (req.vars.story !== "s3") await write(path.join(req.directory, "NOTES.md"), `${req.vars.story} was here\n`)
+          return {}
+        },
+      },
+    })
+    const st = await h.engine.run()
+    expect(st.status).toBe("done")
+    expect(await Bun.file(path.join(h.root, "NOTES.md")).text()).toBe("s1 was here\ns2 was here\n")
+    // the story that landed second merged main in and resolved the conflict on its own branch
+    expect(out(h.root, "log", "--format=%s")).toMatch(/Merge branch 'main' into slate\/s[12]/)
+    expect(out(h.root, "status", "--porcelain")).toBe("")
   }, 120_000)
 })
 
