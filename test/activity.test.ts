@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
-import { ActivityTracker, activityLines, describeTool, type ActivityFile } from "../src/opencode/activity.ts"
+import { ActivityTracker, activityLines, describeTool, toolError, type ActivityFile } from "../src/opencode/activity.ts"
 import { tmpProject } from "./helpers.ts"
 
 const ev = (type: string, data: Record<string, unknown>) => ({ type, data })
@@ -37,5 +37,16 @@ describe("agent activity", () => {
     t.end("s1")
     await Bun.sleep(700)
     expect(activityLines(JSON.parse(await Bun.file(file).text()), () => "3s")).toEqual([])
+  })
+})
+
+describe("toolError", () => {
+  test("keeps the argument problems, not the echoed arguments", () => {
+    const msg = 'Invalid arguments for tool "edit":\n- path: Missing key\n\nArguments provided:\n{\n  "newString": "- not a problem"\n}'
+    expect(toolError(msg)).toBe("path: Missing key")
+  })
+  test("otherwise the first line", () => {
+    expect(toolError("File not found: /x/tasks/s5-t2\nmore")).toBe("File not found: /x/tasks/s5-t2")
+    expect(toolError(undefined)).toBe("no reason given")
   })
 })

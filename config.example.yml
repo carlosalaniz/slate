@@ -67,6 +67,7 @@ config:
   on_exhausted: ask-human     # ask-human | ask-decision-agent | fail
   max_plan_rounds: 3          # plan rewrites after a rejection
   max_tdd_rounds: 3           # TDD review rounds per story
+  max_split_rounds: 3         # task splits per design before the scope check sends it back to design
   max_build_rounds: 3         # build/test/verify rounds per task (failed tests use one)
   max_designs: 2              # design + redesigns per story
   max_stories: 50

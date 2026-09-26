@@ -73,7 +73,7 @@ export class ActivityTracker {
         action = describeTool(this.toolNames.get(d.id) ?? "tool", d.input ?? {}, this.root)
         break
       case "session.tool.failed":
-        action = `failed: ${describeTool(this.toolNames.get(d.id) ?? "tool", {}, this.root)}`
+        action = `failed: ${describeTool(this.toolNames.get(d.id) ?? "tool", {}, this.root)} (${toolError(d.error?.message)})`
         break
       case "session.reasoning.started":
         action = "thinking"
@@ -153,4 +153,16 @@ export function activityLines(file: ActivityFile, ageOf: (iso: string) => string
   }
   for (const root of live.filter((s) => !s.parent || !ids.has(s.parent)).sort((a, b) => a.key.localeCompare(b.key))) walk(root, 0)
   return out
+}
+
+/**
+ * One line from a failed tool call's error. OpenCode's "Invalid arguments for tool" message lists
+ * the problems as "- path: Missing key" lines and then echoes the arguments; the problems are the news.
+ */
+export function toolError(message: unknown): string {
+  // Everything after "Arguments provided:" is the model's own input, which may hold "- " lines too.
+  const lines = String(message ?? "").split(/\n\s*Arguments provided:/)[0]!.split("\n").map((l) => l.trim()).filter(Boolean)
+  const problems = lines.filter((l) => l.startsWith("- ")).map((l) => l.slice(2))
+  const text = problems.length ? problems.join("; ") : (lines[0] ?? "no reason given")
+  return text.length > 120 ? `${text.slice(0, 119)}…` : text
 }

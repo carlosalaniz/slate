@@ -4,6 +4,7 @@ story: {story}
 task: {task}
 Retry loops you are inside, innermost first: {loops}.
 Earlier rounds of {retried_loops} did not pass. Read the latest review or verdict files before changing anything.
+The last round failed at {last_failure}
 You may only create or modify files matching: {scope}. Everything else is read-only.
 Never modify files matching {protected}: other agents own them. Your output files below are the exception.
 Output contract: when you stop, these files must exist: {writes}.

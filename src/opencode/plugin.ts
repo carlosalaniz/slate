@@ -8,6 +8,7 @@ import { matcher } from "../util/glob.ts"
 import { parseFrontmatter, stringifyFrontmatter } from "../util/frontmatter.ts"
 import { renderMessage, renderPrompt } from "../engine/core-pack.ts"
 import type { SessionRegistry, SessionEntry } from "./registry.ts"
+import { toolError } from "./activity.ts"
 import { READ_ONLY_RULES, protectRules } from "../engine/prepare.ts"
 
 /**
@@ -157,7 +158,8 @@ export function createSlatePlugin(host: PluginHost) {
         await ctx.tool.hook("execute.after", (ev: any) => {
           const entry = registry.get(ev.sessionID)
           if (!entry) return
-          if (ev.status === "error") host.log(`  [${entry.stepId}] tool ${ev.tool} failed: ${String(ev.error?.message ?? "").slice(0, 200)}`)
+          // Not a system notice: the live view already shows the failure on the agent's line.
+          if (ev.status === "error") host.log(`  ${entry.key}: tool ${ev.tool} failed: ${toolError(ev.error?.message)}`)
         }),
       )
 

@@ -12,6 +12,8 @@ config:
   # Plan rounds: each rejection of the plan (with a note) rewrites the stories.
   max_plan_rounds: 3
   max_tdd_rounds: 3
+  # Tries to split a design into tasks that pass the scope check, before the design itself is redone.
+  max_split_rounds: 3
   max_build_rounds: 3
   # Design rounds per story: the first design plus redesigns after a task runs out of build rounds.
   max_designs: 2
@@ -86,9 +88,17 @@ phases:
                 - { id: review-tdd, type: skill, skill: review-tdd, by: reviewer,
                     writes: ["stories/{story}/review-{round}.md"],
                     result: { file: "stories/{story}/review-{round}.md", field: verdict } }
-            - { id: split-tdd, type: skill, skill: split-tdd-into-tasks, by: architect,
-                writes: ["stories/{story}/tasks.yaml"] }
-            - { id: check-scopes, type: script, script: check-task-scopes, args: ["{story}"] }
+            # A split the scope check rejects is redone on its own (the check writes its problems to
+            # stories/{story}/scope-check.md); only a split that keeps failing sends the story back to design.
+            - id: split
+              type: loop
+              until: all-pass
+              max: "${max_split_rounds}"
+              on_exhausted: fail
+              steps:
+                - { id: split-tdd, type: skill, skill: split-tdd-into-tasks, by: architect,
+                    writes: ["stories/{story}/tasks.yaml"] }
+                - { id: check-scopes, type: script, script: check-task-scopes, args: ["{story}"] }
             - id: task-loop
               type: loop
               over: { script: next-task, args: ["{story}"] }

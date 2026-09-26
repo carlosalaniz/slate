@@ -177,6 +177,61 @@ describe("parallel stories (git)", () => {
   }, 120_000)
 })
 
+describe("task split", () => {
+  test("a split the scope check rejects is redone on its own, told why", async () => {
+    const h = await harness({
+      manifest: {},
+      usePackDir: referencePackDir(),
+      config: { config: { max_stories: 5 } },
+      fake: {
+        behaviors: {
+          "split-tdd": {
+            run: async (req, n) => {
+              if (n > 1) return {}
+              await Bun.write(path.join(req.directory, `stories/${req.vars.story}/tasks.yaml`), `tasks:\n  - id: ${req.vars.story}-t1\n    title: No scope\n`)
+              return { skipWrites: true }
+            },
+          },
+        },
+      },
+    })
+    const st = await h.engine.run()
+    expect(st.status).toBe("done")
+    const design = "build/story-loop[0]/design"
+    expect(st.loops[design]).toMatchObject({ passed: true, round: 1 })
+    expect(st.loops[`${design}{1}/split`]).toMatchObject({ passed: true, round: 2 })
+    expect(h.runtime.calls.filter((c) => c.key.startsWith(`${design}{1}/tdd`) && c.step === "write-tdd")).toHaveLength(1)
+    const second = h.runtime.calls.find((c) => c.key === `${design}{1}/split{2}/split-tdd`)!
+    expect(second.prompt).toContain("The last round failed at check-scopes: task s1-t1 has no scope")
+    // the check's record is gone once a split passes
+    expect(existsSync(path.join(h.root, "stories/s1/scope-check.md"))).toBe(false)
+  }, 120_000)
+})
+
+describe("check-task-scopes", () => {
+  const script = path.join(referencePackDir(), "scripts/scripts/check-task-scopes.ts")
+  const run = (root: string) => JSON.parse(Bun.spawnSync([process.execPath, script, "s1"], { env: { ...process.env, SLATE_WORKSPACE: root } }).stdout.toString() || "{}")
+  const record = (root: string) => path.join(root, "stories/s1/scope-check.md")
+
+  test("scope.create counts as the task's files", async () => {
+    const root = await tmpProject()
+    await Bun.write(path.join(root, "stories/s1/tasks.yaml"), "tasks:\n  - id: s1-t1\n    scope: { create: [public/manifest.json] }\n  - id: s1-t2\n    scope: { modify: [index.html] }\n")
+    expect(run(root)).toEqual({ ok: true })
+  })
+
+  test("problems are written for the next split and cleared once it passes", async () => {
+    const root = await tmpProject()
+    await Bun.write(path.join(root, "stories/s1/tasks.yaml"), "tasks:\n  - id: s1-t1\n  - id: s1-t2\n    scope: { modify: ['src/**'] }\n  - id: s1-t3\n    scope: { create: [src/a.ts] }\n")
+    expect(run(root)).toMatchObject({ ok: false })
+    const text = await Bun.file(record(root)).text()
+    expect(text).toContain("- task s1-t1 has no scope")
+    expect(text).toContain("- tasks s1-t2 and s1-t3 overlap: src/** vs src/a.ts")
+    await Bun.write(path.join(root, "stories/s1/tasks.yaml"), "tasks:\n  - id: s1-t1\n    scope: { modify: [src/a.ts] }\n")
+    expect(run(root)).toEqual({ ok: true })
+    expect(existsSync(record(root))).toBe(false)
+  })
+})
+
 describe("tests step", () => {
   test("failing tests go back to the builder without a checker session", async () => {
     // The tech spec's test command fails the first time it runs, then passes.

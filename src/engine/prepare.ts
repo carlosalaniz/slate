@@ -81,7 +81,7 @@ export async function resolveScope(engine: Engine, step: SkillStep, agent: Agent
   return narrowed.length ? narrowed : agentGlobs
 }
 
-/** `stories/{story}/tasks.yaml#{task}.scope` -> tasks[].id === task -> scope.modify */
+/** `stories/{story}/tasks.yaml#{task}.scope` -> tasks[].id === task -> scope.modify (plus scope.create) */
 export async function scopeFromFile(ref: string, directory: string): Promise<string[] | undefined> {
   const [file, pointer] = ref.split("#")
   if (!file || !pointer) return undefined
@@ -99,7 +99,7 @@ export async function scopeFromFile(ref: string, directory: string): Promise<str
   for (const seg of rest) node = node?.[seg]
   if (!node) return undefined
   if (Array.isArray(node)) return node.map(String)
-  if (Array.isArray(node.modify)) return node.modify.map(String)
+  if (Array.isArray(node.modify) || Array.isArray(node.create)) return [...(node.modify ?? []), ...(node.create ?? [])].map(String)
   if (typeof node === "string") return [node]
   return undefined
 }
@@ -183,6 +183,8 @@ export function composePrompt(engine: Engine, step: SkillStep, ctx: Ctx, skill: 
     task: vars.task,
     loops: loops.map((f) => `'${f.id}' round ${f.round} of ${f.max}`).join(", "),
     retried_loops: loops.filter((f) => f.round > 1).map((f) => `'${f.id}'`).join(", "),
+    // The innermost retried loop is the one this step is redoing.
+    last_failure: loops.find((f) => f.round > 1 && f.lastFailure)?.lastFailure?.slice(0, 1500) ?? "",
     // `**` restricts nothing, so the scope line is left out.
     scope: scope.includes("**") ? "" : scope.join(", "),
     protected: (agent?.scope.protect ?? []).join(", "),

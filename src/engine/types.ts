@@ -249,6 +249,8 @@ export interface LoopCursor {
   passed?: boolean
   skipped?: boolean
   exhausted?: boolean
+  /** until: why the last failed round failed, kept so a resumed job can still tell the agents. */
+  lastFailure?: string
 }
 
 export type QuestionKind = "approval" | "exhausted" | "permission" | "form" | "pack"

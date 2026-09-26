@@ -39,7 +39,7 @@ async function runUntil(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqRe
   if (!engine.state.loops[key]) await engine.o.state.update((s) => (s.loops[key] = { key, loop: step.id, kind: "until", round: 1 }))
   if (cursor().passed || cursor().skipped) return PASSED
   let round = cursor().round ?? 1
-  let lastReason = ""
+  let lastReason = cursor().lastFailure ?? ""
   while (true) {
     const limit = max + (cursor().extra ?? 0)
     if (round > limit) {
@@ -73,7 +73,7 @@ async function runUntil(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqRe
       ...ctx,
       prefix: `${key}{${round}}`,
       vars: { ...ctx.vars, round: String(round), [`round.${step.id}`]: String(round) },
-      untilStack: [...ctx.untilStack, { id: step.id, round, max: limit }],
+      untilStack: [...ctx.untilStack, { id: step.id, round, max: limit, lastFailure: round > 1 ? lastReason : undefined }],
     }
     const res = await runSequence(engine, step.steps, inner)
     let passed = false
@@ -99,6 +99,9 @@ async function runUntil(engine: Engine, step: LoopStep, ctx: Ctx): Promise<SeqRe
       })
       return PASSED
     }
+    await engine.o.state.update((s) => {
+      s.loops[key]!.lastFailure = lastReason
+    })
     round++
   }
 }

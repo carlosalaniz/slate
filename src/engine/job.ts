@@ -32,6 +32,8 @@ export interface UntilFrame {
   id: string
   round: number
   max: number
+  /** Why the previous round failed (the failing step and its reason), shown to agents in the next. */
+  lastFailure?: string
 }
 
 /**

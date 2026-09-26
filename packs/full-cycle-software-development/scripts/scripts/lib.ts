@@ -42,7 +42,8 @@ export interface StoryGraph {
 export interface Task {
   id: string | number
   title?: string
-  scope?: { modify?: string[] }
+  /** Files the task owns: `modify` for existing ones; `create` (new files) is accepted as the same thing. */
+  scope?: { modify?: string[]; create?: string[] }
 }
 export interface TaskList {
   tasks?: Task[]
@@ -76,6 +77,11 @@ function parseYaml<T>(relativePath: string): { value: T | undefined } | { error:
 
 export function exists(relativePath: string): boolean {
   return fs.existsSync(path.join(workspace, relativePath))
+}
+
+/** Every file or glob a task owns, whether it is listed under scope.modify or scope.create. */
+export function taskScope(task: Task): string[] {
+  return [...(task.scope?.modify ?? []), ...(task.scope?.create ?? [])].map(String)
 }
 
 /** Items this over-loop has already handed out (Slate passes them in SLATE_CLAIMED). */
