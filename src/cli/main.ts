@@ -8,6 +8,11 @@ export function register(name: string, help: string, run: (argv: string[], out: 
   COMMANDS[name] = { run, help }
 }
 
+/** Runs another command in this process, e.g. discovery continuing into `slate start`. */
+export function runCommand(name: string, argv: string[], out: Output): Promise<number> {
+  return COMMANDS[name]!.run(argv, out)
+}
+
 const HELP = `slate — workflow runner for long, unattended agent jobs (OpenCode v2 plugin + CLI)
 
 usage: slate <command> [options]   (every command accepts --json)

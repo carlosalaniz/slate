@@ -1,8 +1,8 @@
 /** Fails when stories/graph.yaml is missing a story, names an unknown one, or has a cycle. */
-import { readYaml, reply, type StoryGraph, type StoryIndex } from "./lib.ts"
+import { checkYaml, reply, type StoryGraph, type StoryIndex } from "./lib.ts"
 
-const stories = (readYaml<StoryIndex>("stories/index.yaml")?.stories ?? []).map((s) => String(s.id))
-const nodes = readYaml<StoryGraph>("stories/graph.yaml")?.nodes ?? {}
+const stories = (checkYaml<StoryIndex>("stories/index.yaml")?.stories ?? []).map((s) => String(s.id))
+const nodes = checkYaml<StoryGraph>("stories/graph.yaml")?.nodes ?? {}
 const dependenciesOf = (id: string) => (nodes[id] ?? []).map(String)
 const problems: string[] = []
 

@@ -148,12 +148,18 @@ export async function runDiscovery(paths: ProjectPaths, config: ProjectConfig, o
     const stopWatching = watchPackChoice(paths, async (pack) => {
       if ((await handedTo()) !== pack.name) await handOff(opencode, paths, config, core, session, pack)
     })
+    let stopDone: (() => void) | undefined
     try {
       const args = [opencode, "--session", session, ...(firstMessage ? ["--prompt", firstMessage] : []), paths.root]
       firstMessage = undefined
-      await Bun.spawn(args, { cwd: paths.root, stdio: ["inherit", "inherit", "inherit"] }).exited
+      const proc = Bun.spawn(args, { cwd: paths.root, stdio: ["inherit", "inherit", "inherit"] })
+      // When the lead marks discovery done and every document is written, close the app for them
+      // (OpenCode exits cleanly on SIGINT, restoring the terminal).
+      stopDone = watchFinished(paths, () => proc.kill("SIGINT"))
+      await proc.exited
     } finally {
       stopWatching()
+      stopDone?.()
     }
     // Picked just before quitting, or the in-app switch failed: hand off now and reopen the app.
     const after = await chosenPack(paths)
@@ -337,6 +343,23 @@ function watchPackChoice(paths: ProjectPaths, onPack: (pack: InstalledPack) => P
       busy = false
     }
   }, 1000)
+  return () => clearInterval(timer)
+}
+
+/** Polls for a finished discovery: `status: done` in the brief and every document written. */
+function watchFinished(paths: ProjectPaths, onDone: () => void): () => void {
+  let fired = false
+  const timer = setInterval(async () => {
+    if (fired) return
+    try {
+      if (frontmatter(await readTextOr(paths.brief, "")).status !== "done" || !(await checkDiscovery(paths)).done) return
+      fired = true
+      // Leave the lead's closing sentence on screen for a moment.
+      setTimeout(onDone, 4000)
+    } catch {
+      /* try again on the next tick */
+    }
+  }, 1500)
   return () => clearInterval(timer)
 }
 

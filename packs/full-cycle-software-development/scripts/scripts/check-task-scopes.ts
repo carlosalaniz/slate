@@ -1,8 +1,8 @@
 /** Fails when a story's tasks are misnamed, have no scope, or two tasks may modify the same files. */
-import { readYaml, reply, broken, type TaskList } from "./lib.ts"
+import { checkYaml, reply, broken, type TaskList } from "./lib.ts"
 
 const story = process.argv[2] ?? process.env.SLATE_VAR_STORY ?? broken("usage: check-task-scopes <story>")
-const tasks = readYaml<TaskList>(`stories/${story}/tasks.yaml`)?.tasks ?? []
+const tasks = checkYaml<TaskList>(`stories/${story}/tasks.yaml`)?.tasks ?? []
 if (!tasks.length) reply({ ok: false, reason: `stories/${story}/tasks.yaml has no tasks` })
 
 /** The fixed part of a glob, before its first wildcard: `src/a/**` -> `src/a/`. */

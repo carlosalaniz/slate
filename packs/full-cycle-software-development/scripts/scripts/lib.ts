@@ -29,11 +29,30 @@ export interface TaskList {
   tasks?: Task[]
 }
 
-/** Reads a YAML file relative to the workspace; undefined when it does not exist. */
+/**
+ * Reads a YAML file relative to the workspace; undefined when it does not exist. A file that does
+ * not parse stops the job with a one-line reason (an iterator cannot go on without it); checks use
+ * `checkYaml` instead.
+ */
 export function readYaml<T>(relativePath: string): T | undefined {
+  const parsed = parseYaml<T>(relativePath)
+  return "error" in parsed ? broken(`${relativePath} is not valid YAML: ${parsed.error}`) : parsed.value
+}
+
+/** Like readYaml, for checks: a file that does not parse is a failed check, not a broken script. */
+export function checkYaml<T>(relativePath: string): T | undefined {
+  const parsed = parseYaml<T>(relativePath)
+  return "error" in parsed ? reply({ ok: false, reason: `${relativePath} is not valid YAML: ${parsed.error}` }) : parsed.value
+}
+
+function parseYaml<T>(relativePath: string): { value: T | undefined } | { error: string } {
   const file = path.join(workspace, relativePath)
-  if (!fs.existsSync(file)) return undefined
-  return (Bun.YAML.parse(fs.readFileSync(file, "utf8")) ?? undefined) as T | undefined
+  if (!fs.existsSync(file)) return { value: undefined }
+  try {
+    return { value: (Bun.YAML.parse(fs.readFileSync(file, "utf8")) ?? undefined) as T | undefined }
+  } catch (e) {
+    return { error: (e as Error).message }
+  }
 }
 
 export function exists(relativePath: string): boolean {

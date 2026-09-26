@@ -1,7 +1,7 @@
 import path from "node:path"
 import os from "node:os"
 import YAML from "yaml"
-import { register } from "../main.ts"
+import { register, runCommand } from "../main.ts"
 import { parseArgs, str, bool, num } from "../args.ts"
 import { CliError, table, type Output } from "../output.ts"
 import { requireProject, requireJob, isEngineAlive } from "../context.ts"
@@ -106,7 +106,7 @@ Fails when a project is already initialized.`,
       return 0
     }
     out.line("")
-    return reportDiscovery(await runDiscovery(paths, config), out)
+    return afterDiscovery(await runDiscovery(paths, config), out)
   },
 )
 
@@ -170,7 +170,7 @@ Discovery always needs you present, so it needs a terminal.`,
     if (!process.stdin.isTTY || out.json) throw new CliError("discovery is a live conversation and needs a terminal", "run `slate discover` in an interactive shell")
     const mode = await chooseDiscoveryMode(p.paths, flags, out, false)
     if (mode === "skip") return 1
-    return reportDiscovery(await runDiscovery(p.paths, p.config, { mode }), out)
+    return afterDiscovery(await runDiscovery(p.paths, p.config, { mode }), out)
   },
 )
 
@@ -205,6 +205,14 @@ async function chooseDiscoveryMode(paths: ReturnType<typeof projectPaths>, flags
     }
   }
   return mode ?? "continue"
+}
+
+/** Reports the discovery outcome; when it is done, offers to go straight into `slate start`. */
+async function afterDiscovery(check: DiscoveryCheck, out: Output): Promise<number> {
+  const code = reportDiscovery(check, out)
+  if (!check.done || out.json || !process.stdin.isTTY) return code
+  const next = await select("start planning and building now?", [{ value: "yes", label: "yes (Recommended)" }, { value: "later", hint: "run slate start when you are ready" }], "yes")
+  return next === "yes" ? runCommand("start", [], out) : code
 }
 
 function reportDiscovery(check: DiscoveryCheck, out: Output): number {

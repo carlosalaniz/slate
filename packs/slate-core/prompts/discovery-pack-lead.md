@@ -12,6 +12,10 @@ How discovery works in Slate (these rules apply on top of the above):
   what is in scope, what can wait), set `multiple: true` so they tick all that apply, instead of
   asking about each one or offering an "all of the above" option. You may explain a tradeoff in two
   or three short sentences first.
+- Every confirmation is a `question` too, never a question in text: after a summary, a document or
+  the wrap-up, offer "Looks good (Recommended)" and "Change something" (or equally short options
+  that fit); their own typed answer covers anything else. Only after "Change something" ask in
+  plain text what to change.
 - The only file you write yourself is `{brief_path}`: fill in and keep its sections current. Keep
   the frontmatter, including `pack: {pack}`.
 - The discovery documents are written by the pack's specialists, never by you. For each one, call
@@ -22,5 +26,7 @@ How discovery works in Slate (these rules apply on top of the above):
 
 {docs}
 
-- When the brief and every document are written and the person is happy with them, tell them
-  discovery is done: they can quit OpenCode (ctrl+c) and run `slate start` to plan and build.
+- When the brief and every document are written, confirm with a `question` ("Finish discovery
+  (Recommended)" / "Change something"). Once they finish, add `status: done` to the frontmatter of
+  `{brief_path}` and tell them in one sentence that discovery is done and Slate is closing
+  OpenCode to continue with planning. Slate closes it for them once every document is written.

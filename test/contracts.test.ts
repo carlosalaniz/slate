@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import { writeFile, mkdir } from "node:fs/promises"
-import { checkContracts, repromptText } from "../src/engine/contracts.ts"
+import { checkContracts, repromptText, parseError } from "../src/engine/contracts.ts"
 import { loadCorePack, renderMessage, renderPrompt } from "../src/engine/core-pack.ts"
 import { parseFrontmatter, readField } from "../src/util/frontmatter.ts"
 import { resolveRuntime, resolveConfigValue } from "../src/engine/vars.ts"
-import { tmpProject } from "./helpers.ts"
+import { tmpProject, referencePackDir } from "./helpers.ts"
 
 describe("contracts", () => {
   test("missing writes fail", async () => {
@@ -76,5 +76,34 @@ describe("frontmatter and vars", () => {
     expect(() => resolveRuntime("{missing}", {}, { strict: true })).toThrow()
     expect(resolveConfigValue<number>("${n}", { n: 4 }, "x")).toBe(4)
     expect(resolveConfigValue<string>("a-${n}", { n: 4 }, "x")).toBe("a-4")
+  })
+})
+
+describe("YAML/JSON outputs must parse", () => {
+  // The line an architect wrote in a real run: an unquoted list item containing `": "`.
+  const BAD = 'tasks:\n  - id: s1-t1\n    acceptance:\n      - tsconfig.json has "strict": true, "jsx": "react-jsx"\n'
+
+  test("a declared YAML output that does not parse fails the contract with its line", async () => {
+    const root = await tmpProject()
+    await Bun.write(path.join(root, "stories/s1/tasks.yaml"), BAD)
+    const check = await checkContracts({ directory: root, writes: ["stories/{story}/tasks.yaml"], vars: { story: "s1" } })
+    expect(check.ok).toBe(false)
+    expect(check.invalid?.[0]?.file).toBe("stories/s1/tasks.yaml")
+    expect(check.invalid?.[0]?.error).toContain("line 4")
+    const core = await loadCorePack()
+    expect(repromptText(core, check, ["stories/s1/tasks.yaml"])).toContain("stories/s1/tasks.yaml: line 4")
+    expect(parseError("x.json", "{")).toBeDefined()
+    expect(parseError("x.md", "not: [yaml")).toBeUndefined()
+  })
+
+  test("check-task-scopes reports unparseable tasks as a failed check, not a broken script", async () => {
+    const root = await tmpProject()
+    await Bun.write(path.join(root, "stories/s1/tasks.yaml"), BAD)
+    const script = path.join(referencePackDir(), "scripts/scripts/check-task-scopes.ts")
+    const run = Bun.spawnSync([process.execPath, script, "s1"], { env: { ...process.env, SLATE_WORKSPACE: root } })
+    expect(run.exitCode).toBe(0)
+    const answer = JSON.parse(run.stdout.toString())
+    expect(answer.ok).toBe(false)
+    expect(answer.reason).toContain("stories/s1/tasks.yaml is not valid YAML")
   })
 })
