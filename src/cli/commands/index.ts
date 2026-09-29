@@ -24,6 +24,7 @@ import { ensureDir, writeJsonAtomic, writeText, readTextOr, isFile, removePath }
 import { ageOf, usd, sleep } from "../../util/time.ts"
 import { createJob, runForeground, runDetached, makeRuntime, type RunOptions } from "./run-job.ts"
 import "./check.ts"
+import "./skill.ts"
 import { uncoveredNeeds } from "../../engine/capabilities.ts"
 import { loadCorePack } from "../../engine/core-pack.ts"
 import { loadPack } from "../../pack/loader.ts"
@@ -218,7 +219,7 @@ async function afterDiscovery(check: DiscoveryCheck, out: Output): Promise<numbe
   if (!check.done) return code
   // What the product needs but nothing installed covers: `slate start` would halt on it right away.
   const p = await requireProject()
-  const gaps = await uncoveredNeeds({ root: p.root, project: p.config, core: await loadCorePack() }, await loadPack(check.pack!.dir, p.config.config))
+  const gaps = await uncoveredNeeds({ root: p.root, project: p.config, core: await loadCorePack() }, await loadPack(check.pack!.dir, p.config.config, { projectRoot: p.root }))
   if (gaps.length) {
     out.emit(() => ["", "but the product needs things nothing installed covers; `slate start` halts until they are:", ...gaps.map((g) => `  - ${g}`), "`slate check` checks everything the job needs"], { gaps })
     return 1

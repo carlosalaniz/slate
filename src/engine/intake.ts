@@ -45,7 +45,7 @@ export async function runIntake(engine: Engine): Promise<void> {
     if (!engine.pack) {
       const chosen = await proposePack(engine, await readText(engine.o.paths.brief), start)
       if (!chosen) throw new JobFailed("no installed pack fits this brief; install one with `slate pack add <dir>` or pass --pack")
-      engine.pack = await loadPack(chosen.dir, engine.o.project.config)
+      engine.pack = await loadPack(chosen.dir, engine.o.project.config, { projectRoot: engine.o.root })
       engine.log(`pack: ${chosen.name}@${chosen.version}`)
     }
   } finally {

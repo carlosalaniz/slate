@@ -67,7 +67,13 @@ runtime:
 # halts with the fix when something is missing. Waive an id here to go without it instead:
 # nothing checks it and agents are told it is unavailable. `slate check` runs the checks on demand.
 capabilities:
-  waive: []                   # e.g. [playwright, image-input, audio-synthesis]
+  waive: []                   # e.g. [playwright, image-input, DEEPGRAM_API_KEY, audio-synthesis]
+
+# Where `slate skill find` looks when the product needs something nothing installed covers: a
+# skills.sh-compatible skill index and an MCP registry. You pick; Slate installs into .slate/installed/.
+marketplace:
+  skills: https://skills.sh
+  tools: https://registry.modelcontextprotocol.io
 
 # Pack-specific config. These override the pack's own defaults and fill `${config}`
 # placeholders in the pack. The keys below are the reference pack's; your pack may differ.

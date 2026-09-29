@@ -21,5 +21,6 @@ prompt: |
       # (neither)                          # nothing installed covers it
   ```
   Never plan around a gap with stand-ins (silent files, placeholder images): a need nothing covers
-  stops the job before planning until someone adds the skill or decides to go without it. With no
+  stops the job before planning until the person installs a skill for it (`slate skill find --need
+  <id>` searches the skill and tool marketplaces) or decides to go without it. Tell them so. With no
   such needs, write `needs: []`.

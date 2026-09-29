@@ -15,7 +15,7 @@ talks to agents; no TypeScript change is needed.
 
 | Template | Sent when | Placeholders |
 | --- | --- | --- |
-| `step.md` | every skill step starts | step, phase, directory, story, task, loops, retried_loops, scope, writes, result_file, result_field, consult_agents, consult_max, tools, waived, skill_prompt, step_prompt |
+| `step.md` | every skill step starts | step, phase, directory, story, task, loops, retried_loops, scope, writes, result_file, result_field, consult_agents, consult_max, tools, product_skills, waived, skill_prompt, step_prompt |
 | `reprompt.md` | a step ended without its output contract (missing, or YAML/JSON that does not parse) | missing, invalid, writes, result_file, result_field |
 | `plan-revision.md` | `slate plan revise` re-runs the plan steps | revision, note |
 | `consult.md` | an agent calls the `consult` tool | parent_agent, step, question |

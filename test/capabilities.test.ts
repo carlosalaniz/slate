@@ -49,7 +49,7 @@ describe("requirements: loading", () => {
     await expect(loadPack(await packWith({ agents: worker({ tools: ["nope"] }) }))).rejects.toThrow(/requires unknown tool 'nope'/)
     const pack = await loadPack(await packWith({ skills: { make: { ...BASIC_SKILLS.make, requires: { tools: ["playwright"], model: { input: ["image"] } } } } }))
     expect(pack.capabilities.playwright?.mcp?.command).toContain("@playwright/mcp@latest")
-    expect(pack.skills.make!.requires).toEqual({ tools: ["playwright"], model: { input: ["image"], output: [] } })
+    expect(pack.skills.make!.requires).toEqual({ tools: ["playwright"], model: { input: ["image"], output: [] }, env: [] })
   })
 
   test("capability code belongs in capabilities/scripts/", async () => {

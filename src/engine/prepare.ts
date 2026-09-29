@@ -48,7 +48,7 @@ export function baseVars(engine: Engine): Record<string, string> {
 export async function loadPinnedPack(engine: Engine): Promise<void> {
   const pinned = engine.state.job.pack
   if (!pinned) throw new JobFailed("no pack pinned for this job; run `slate start` again")
-  engine.pack = await loadPack(pinned.dir, engine.o.project.config)
+  engine.pack = await loadPack(pinned.dir, engine.o.project.config, { projectRoot: engine.o.root })
   await engine.o.state.update((s) => {
     s.config = engine.pack!.config
   })
@@ -211,6 +211,7 @@ export function composePrompt(engine: Engine, step: SkillStep, ctx: Ctx, skill: 
     consult_max: step.consult?.max ?? "",
     tools: agent ? allowedTools(engine, agent, skill).filter((t) => engine.mcpNames.includes(t)).join(", ") : "",
     waived: agent ? waivedFor(engine, agent, skill).join(", ") : "",
+    product_skills: agent?.role === "worker" ? [...engine.needSkills].map(([s, n]) => `\`${s}\` (for ${n})`).join(", ") : "",
     skill_prompt: resolveRuntime(skill.prompt, vars),
     step_prompt: step.prompt ? resolveRuntime(step.prompt, vars) : "",
   })

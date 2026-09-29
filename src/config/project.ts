@@ -67,6 +67,13 @@ export const ProjectConfigSchema = z.object({
    * checks it, and agents are told it is unavailable instead of the job halting.
    */
   capabilities: z.object({ waive: z.array(z.string().min(1)).default([]) }).default({ waive: [] }),
+  /** Where `slate skill find` searches: a skills.sh-compatible skill index and an MCP registry. */
+  marketplace: z
+    .object({
+      skills: z.string().url().default("https://skills.sh"),
+      tools: z.string().url().default("https://registry.modelcontextprotocol.io"),
+    })
+    .default({ skills: "https://skills.sh", tools: "https://registry.modelcontextprotocol.io" }),
   config: z.record(z.string(), z.unknown()).default({}),
 })
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>

@@ -8,6 +8,7 @@ import {
   SkillFileSchema,
   ScriptFileSchema,
   CapabilityFileSchema,
+  RequiresSchema,
   ExhaustedSimple,
   type Manifest,
   type Step,
@@ -23,6 +24,7 @@ import type { LoadedPack } from "../engine/types.ts"
 import { resolveConfigValue } from "../engine/vars.ts"
 import { listVars } from "../engine/vars.ts"
 import { bundledPacksDir } from "../config/paths.ts"
+import { parseFrontmatter } from "../util/frontmatter.ts"
 
 export class PackError extends Error {
   constructor(public readonly problems: string[]) {
@@ -166,6 +168,7 @@ async function readCapabilities(packDir: string, problems: string[]): Promise<Re
     dir,
     (raw, id): CapabilitySpec => {
       const f = CapabilityFileSchema.parse(raw)
+      if (!f.check && !f.mcp) throw new Error("needs a check, an mcp server, or both")
       return { id, ...f, packDir: path.resolve(packDir), timeoutMs: parseDuration(f.timeout, 60_000) }
     },
     problems,
@@ -241,7 +244,104 @@ export function resolveManifest(manifest: Manifest, config: Record<string, unkno
   }
 }
 
-export async function loadPack(dir: string, overrides: Record<string, unknown> = {}): Promise<LoadedPack> {
+/**
+ * A standard skill folder (agentskills.io: `<id>/SKILL.md` with `name` and `description` in its
+ * frontmatter, plus any references and scripts). Slate reads its requirements from
+ * `metadata.slate.requires`, and takes environment variables other agents' metadata lists
+ * (`metadata.<tool>.requires.env`, as skills from marketplaces carry them).
+ */
+async function readSkillFolder(folder: string, id: string, problems: string[], where: string): Promise<SkillSpec | undefined> {
+  const { data, body, present } = parseFrontmatter(await readText(path.join(folder, "SKILL.md")))
+  if (!present || typeof data.description !== "string" || !data.description.trim()) {
+    problems.push(`${where}/SKILL.md: needs frontmatter with a description`)
+    return undefined
+  }
+  const metadata = (data.metadata && typeof data.metadata === "object" ? data.metadata : {}) as Record<string, unknown>
+  const slate = (metadata.slate && typeof metadata.slate === "object" ? metadata.slate : {}) as { requires?: unknown }
+  let requires
+  try {
+    requires = RequiresSchema.parse(slate.requires ?? {})
+  } catch (e) {
+    problems.push(`${where}/SKILL.md: metadata.slate.requires: ${formatZod(e)}`)
+    return undefined
+  }
+  const env = new Set(requires.env)
+  for (const v of Object.values(metadata)) {
+    const listed = (v as { requires?: { env?: unknown } } | null)?.requires?.env
+    if (Array.isArray(listed)) for (const name of listed) if (typeof name === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) env.add(name)
+  }
+  return {
+    id,
+    description: data.description.trim(),
+    reads: [],
+    requires: { ...requires, env: [...env] },
+    prompt: body.trim() || data.description.trim(),
+    dir: path.resolve(folder),
+    compatibility: typeof data.compatibility === "string" ? data.compatibility : undefined,
+  }
+}
+
+/** `skills/<id>.yml` (Slate's own) and `skills/<id>/SKILL.md` folders side by side. */
+async function readSkills(dir: string, problems: string[], label = "skills"): Promise<Record<string, SkillSpec>> {
+  const out = await readYamlDir(dir, (raw, id): SkillSpec => ({ id, ...SkillFileSchema.parse(raw) }), problems)
+  if (!(await isDir(dir))) return out
+  for (const name of await listDir(dir)) {
+    const folder = path.join(dir, name)
+    if (!(await isFile(path.join(folder, "SKILL.md")))) continue
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+      problems.push(`${label}/${name}: a skill folder's name must be a kebab-case id`)
+      continue
+    }
+    if (out[name]) {
+      problems.push(`${label}/${name}: both ${name}.yml and ${name}/SKILL.md define this skill`)
+      continue
+    }
+    const skill = await readSkillFolder(folder, name, problems, `${label}/${name}`)
+    if (skill) out[name] = skill
+  }
+  return out
+}
+
+/** Where a project keeps what it installed from marketplaces: merged into whatever pack its jobs use. */
+export function installedDir(root: string): string {
+  return path.join(root, ".slate", "installed")
+}
+
+export interface LockEntry {
+  kind: "skill" | "tool"
+  id: string
+  source: string
+  /** skills: the repository commit; tools: the registry version. */
+  version: string
+  path?: string
+  /** Keys a skill reads without declaring them, found at install: checked like declared ones. */
+  env?: string[]
+  installed: string
+}
+
+export async function readLock(root: string): Promise<LockEntry[]> {
+  const file = path.join(installedDir(root), "lock.yaml")
+  if (!(await isFile(file))) return []
+  const doc = YAML.parse(await readText(file)) as { installed?: LockEntry[] } | null
+  return doc?.installed ?? []
+}
+
+/** The project's installed skills and tools; they shadow the pack's own under the same id. */
+async function readInstalled(root: string, problems: string[]): Promise<{ skills: Record<string, SkillSpec>; capabilities: Record<string, CapabilitySpec> }> {
+  const dir = installedDir(root)
+  if (!(await isDir(dir))) return { skills: {}, capabilities: {} }
+  const skills = await readSkills(path.join(dir, "skills"), problems, ".slate/installed/skills")
+  const capabilities = await readCapabilities(dir, problems)
+  for (const entry of await readLock(root)) {
+    const s = entry.kind === "skill" ? skills[entry.id] : undefined
+    if (!s) continue
+    s.source = { repo: entry.source, commit: entry.version, path: entry.path ?? "" }
+    s.requires = { ...s.requires, env: [...new Set([...s.requires.env, ...(entry.env ?? [])])] }
+  }
+  return { skills, capabilities }
+}
+
+export async function loadPack(dir: string, overrides: Record<string, unknown> = {}, opts: { projectRoot?: string } = {}): Promise<LoadedPack> {
   const problems: string[] = []
   const manifestPath = path.join(dir, "slate-pack.yml")
   if (!(await isFile(manifestPath))) throw new PackError([`${dir}: slate-pack.yml not found`])
@@ -256,7 +356,9 @@ export async function loadPack(dir: string, overrides: Record<string, unknown> =
   const manifest = parsed.data
 
   const agents = await readYamlDir(path.join(dir, "agents"), (raw, id): AgentSpec => ({ id, ...AgentFileSchema.parse(raw) }), problems)
-  const skills = await readYamlDir(path.join(dir, "skills"), (raw, id): SkillSpec => ({ id, ...SkillFileSchema.parse(raw) }), problems)
+  const own = await readSkills(path.join(dir, "skills"), problems)
+  const installed = opts.projectRoot ? await readInstalled(opts.projectRoot, problems) : { skills: {}, capabilities: {} }
+  const skills = { ...own, ...installed.skills }
   problems.push(...(await checkScriptsLayout(path.join(dir, "scripts"))))
   const scripts = await readYamlDir(
     path.join(dir, "scripts"),
@@ -266,10 +368,11 @@ export async function loadPack(dir: string, overrides: Record<string, unknown> =
     },
     problems,
   )
-  const capabilities = { ...(await coreCapabilities(dir)), ...(await readCapabilities(dir, problems)) }
+  const capabilities = { ...(await coreCapabilities(dir)), ...(await readCapabilities(dir, problems)), ...installed.capabilities }
   problems.push(...validatePack(manifest, agents, skills, scripts, capabilities))
   // Skill prompts may only use runtime vars we know how to provide.
-  for (const s of Object.values(skills)) {
+  // Folder skills are passed on as written (their code samples are full of braces).
+  for (const s of Object.values(skills).filter((x) => !x.dir)) {
     for (const v of listVars(s.prompt + "\n" + s.reads.join("\n"))) {
       if (!/^(story|task|round|round\.[a-z0-9-]+|workspace|run|step|[a-zA-Z_][a-zA-Z0-9_]*)$/.test(v)) problems.push(`skills/${s.id}: bad variable {${v}}`)
     }

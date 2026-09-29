@@ -7,7 +7,7 @@ import { referencePackDir } from "./helpers.ts"
 import type { PermissionRule } from "../src/pack/schema.ts"
 import { parseArgs, str, bool, num } from "../src/cli/args.ts"
 
-const NONE = { tools: [], model: { input: [], output: [] } }
+const NONE = { tools: [], model: { input: [], output: [] }, env: [] }
 
 describe("plugin helpers", () => {
   test("reviewer verdicts require a citation to approve", () => {

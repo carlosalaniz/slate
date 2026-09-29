@@ -254,7 +254,7 @@ export async function writeCoreLead(paths: ProjectPaths, config: ProjectConfig, 
  * (`slate-<agent>`). Returns the lead's name and the documents with their subagents.
  */
 export async function writePackAgents(paths: ProjectPaths, config: ProjectConfig, core: CorePack, pack: InstalledPack): Promise<{ lead: string; docs: NamedDoc[] }> {
-  const loaded = await loadPack(pack.dir)
+  const loaded = await loadPack(pack.dir, config.config, { projectRoot: paths.root })
   // The installed skills and tools, so the architect can map what the product needs to them.
   await writeCatalog(paths.root, loaded, core)
   const docs: NamedDoc[] = (await discoveryDocs(pack)).map((d) => ({ ...d, subagent: `slate-${d.agent.id}` }))

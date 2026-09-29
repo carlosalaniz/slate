@@ -34,15 +34,18 @@ export type Modality = z.infer<typeof Modality>
 /**
  * What an agent, skill or script needs before it can do its work. `tools` are capability ids
  * (`capabilities/<id>.yml` in the pack or in slate-core); `model` lists modalities the model the
- * step runs on must accept (`input`) or produce (`output`). Slate checks all of it before the job
- * starts, without spending tokens, and halts when something is missing and not waived.
+ * step runs on must accept (`input`) or produce (`output`); `env` lists environment variables that
+ * must be set (API keys), in the environment or the project's `.env`. Slate checks all of it before
+ * the job starts, without spending tokens, and halts when something is missing and not waived.
  */
+const EnvName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "env entries are variable names")
 export const RequiresSchema = z
   .object({
     tools: z.array(Id).default([]),
     model: z.object({ input: z.array(Modality).default([]), output: z.array(Modality).default([]) }).default({ input: [], output: [] }),
+    env: z.array(EnvName).default([]),
   })
-  .default({ tools: [], model: { input: [], output: [] } })
+  .default({ tools: [], model: { input: [], output: [] }, env: [] })
 export type Requires = z.infer<typeof RequiresSchema>
 
 export const PermissionRuleSchema = z.object({
@@ -243,6 +246,12 @@ export const SkillFileSchema = z.object({
 export type SkillFile = z.infer<typeof SkillFileSchema>
 export interface SkillSpec extends SkillFile {
   id: string
+  /** A standard skill folder (`<id>/SKILL.md` plus its references and scripts): OpenCode loads it from here. */
+  dir?: string
+  /** Installed from a marketplace: where from, at which commit (`.slate/installed/lock.yaml`). */
+  source?: { repo: string; commit: string; path: string }
+  /** The skill's own `compatibility` line, shown when its requirements are missing. */
+  compatibility?: string
 }
 
 export const ScriptFileSchema = z.object({
@@ -266,10 +275,13 @@ export interface ScriptSpec extends ScriptFile {
  */
 export const CapabilityFileSchema = z.object({
   description: z.string().default(""),
-  check: z.string().min(1),
+  /** Omitted: the capability is its MCP server, and the check is Slate's handshake with it (initialize + tools/list). */
+  check: z.string().min(1).optional(),
   timeout: z.union([z.string(), z.number()]).default("60s"),
   /** How to get it, shown when the check fails. */
   install: z.string().default(""),
+  /** Environment variables it needs (API keys): checked before `check` runs, and passed to its MCP server. */
+  env: z.array(EnvName).default([]),
   mcp: z
     .object({
       command: z.array(z.string()).min(1),

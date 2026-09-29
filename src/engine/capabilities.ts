@@ -1,3 +1,4 @@
+import fs from "node:fs"
 import path from "node:path"
 import YAML from "yaml"
 import type { AgentSpec, CapabilitySpec, Modality, Requires, SkillSpec, Step } from "../pack/schema.ts"
@@ -43,6 +44,41 @@ export interface Requirements {
   needProblems: string[]
   /** Skills named in the needs file, with the need they cover. */
   needSkills: Map<string, string>
+  /** Environment variable -> who needs it (API keys). */
+  env: Map<string, Set<string>>
+  /** What a skill says about itself (its `compatibility` line), shown with a missing variable. */
+  envHints: Map<string, string>
+}
+
+export function emptyRequirements(): Requirements {
+  return { tools: new Map(), sessionTools: new Set(), sharedTools: new Set(), models: [], needProblems: [], needSkills: new Map(), env: new Map(), envHints: new Map() }
+}
+
+/**
+ * The environment steps and MCP servers see: Slate's own, plus the project's `.env` (KEY=value
+ * lines). Values already in the environment win.
+ */
+export function projectEnv(root: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  try {
+    const text = fs.readFileSync(path.join(root, ".env"), "utf8")
+    for (const line of text.split("\n")) {
+      const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line)
+      if (m) out[m[1]!] = m[2]!.replace(/^(["'])(.*)\1$/, "$2")
+    }
+  } catch {
+    /* no .env */
+  }
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && v !== "") out[k] = v
+  return out
+}
+
+function addEnv(req: Requirements, names: string[], who: string, hint?: string): void {
+  for (const n of names) {
+    if (!req.env.has(n)) req.env.set(n, new Set())
+    req.env.get(n)!.add(who)
+    if (hint && !req.envHints.has(n)) req.envHints.set(n, hint)
+  }
 }
 
 export interface Need {
@@ -88,7 +124,7 @@ function modelFor(ctx: CheckContext, t: ModelNeed["tier"]): ModelRef {
 
 /** Everything the steps from `from` onwards require, plus what the needs file maps (once discovery wrote it). */
 export async function collectRequirements(ctx: CheckContext, pack: LoadedPack, from: Phase): Promise<Requirements> {
-  const req: Requirements = { tools: new Map(), sessionTools: new Set(), sharedTools: new Set(), models: [], needProblems: [], needSkills: new Map() }
+  const req = emptyRequirements()
   const agentOf = (id: string): AgentSpec | undefined => pack.agents[id] ?? ctx.core?.agents[id]
   const skillOf = (id: string): SkillSpec | undefined => pack.skills[id] ?? ctx.core?.skills[id]
   const addTools = (tools: string[], who: string, session: boolean) => {
@@ -121,10 +157,13 @@ export async function collectRequirements(ctx: CheckContext, pack: LoadedPack, f
       const who = `${where} (agent ${agent.id}, skill ${skill.id})`
       addTools([...agent.requires.tools, ...skill.requires.tools], who, true)
       addModel([agent.requires, skill.requires], who, step.model ?? agent.model)
+      addEnv(req, agent.requires.env, who)
+      addEnv(req, skill.requires.env, who, skill.compatibility)
       for (const c of step.consult?.agents ?? []) {
         const consultant = agentOf(c)
         if (!consultant) continue
         addTools(consultant.requires.tools, `${where} (consultant ${c})`, true)
+        addEnv(req, consultant.requires.env, `${where} (consultant ${c})`)
         addModel([consultant.requires], `${where} (consultant ${c})`, consultant.model)
       }
     } else if (step.type === "script") script(step.script, where)
@@ -165,6 +204,7 @@ async function addNeeds(ctx: Pick<CheckContext, "root" | "project" | "core">, pa
         continue
       }
       req.needSkills.set(skill.id, need.id)
+      addEnv(req, skill.requires.env, `skill ${skill.id} for ${who}`, skill.compatibility)
       for (const t of skill.requires.tools) req.sharedTools.add(t)
       const tools = skill.requires.tools
       for (const t of tools) {
@@ -184,7 +224,7 @@ async function addNeeds(ctx: Pick<CheckContext, "root" | "project" | "core">, pa
       req.sessionTools.add(need.capability)
     } else {
       req.needProblems.push(
-        `Nothing installed covers ${who}. Add a skill that does it (e.g. ${packPath(ctx.root, pack.dir)}/skills/${need.id}.yml, with its tools under requires:) and name it as \`skill:\` for this need, or waive '${need.id}' in slate.config.yml capabilities.waive.`,
+        `Nothing installed covers ${who}. Find one: \`slate skill find --need ${need.id}\` (skills.sh and the MCP Registry; you pick, Slate installs and maps it). Or write a skill (${packPath(ctx.root, pack.dir)}/skills/${need.id}/SKILL.md) and name it as \`skill:\` for this need, or waive '${need.id}' in slate.config.yml capabilities.waive.`,
       )
     }
   }
@@ -223,21 +263,25 @@ export async function readNeeds(root: string, rel: string): Promise<{ needs: Nee
  * before `slate start` would halt on it.
  */
 export async function uncoveredNeeds(ctx: Pick<CheckContext, "root" | "project" | "core">, pack: LoadedPack): Promise<string[]> {
-  const req: Requirements = { tools: new Map(), sessionTools: new Set(), sharedTools: new Set(), models: [], needProblems: [], needSkills: new Map() }
+  const req = emptyRequirements()
   await addNeeds(ctx, pack, req, (id) => pack.skills[id] ?? ctx.core?.skills[id])
   return req.needProblems
 }
 
-/** MCP servers to register: capabilities some session needs, not waived. */
-export function mcpServers(pack: LoadedPack, req: Requirements, skip: Set<string>): McpServerSpec[] {
+/** MCP servers to register: capabilities some session needs, not waived, with the variables they name. */
+export function mcpServers(pack: LoadedPack, req: Requirements, skip: Set<string>, env: Record<string, string> = {}): McpServerSpec[] {
   const out: McpServerSpec[] = []
   for (const id of [...req.sessionTools, ...req.sharedTools]) {
     const cap = pack.capabilities[id]
     if (!cap?.mcp || skip.has(id) || out.some((s) => s.name === id)) continue
-    out.push({ name: id, command: cap.mcp.command, environment: cap.mcp.environment, startup: cap.mcp.startup })
+    const keys = Object.fromEntries(cap.env.filter((k) => env[k] !== undefined).map((k) => [k, env[k]!]))
+    out.push({ name: id, command: cap.mcp.command, environment: { ...keys, ...cap.mcp.environment }, startup: cap.mcp.startup })
   }
   return out
 }
+
+/** slate-core's generic check for a capability that is only an MCP server: the handshake and its tool list. */
+const MCP_PROBE = "bun $SLATE_PACK/capabilities/scripts/mcp-probe.ts"
 
 export interface PreflightResult {
   ok: boolean
@@ -259,6 +303,26 @@ export async function preflight(ctx: CheckContext, pack: LoadedPack, req: Requir
   const whoList = (s: Set<string> | undefined) => [...(s ?? [])].slice(0, 3).join("; ") + ((s?.size ?? 0) > 3 ? `; and ${s!.size - 3} more` : "")
   const fix = (cap: CapabilitySpec | undefined, id: string) => `${cap?.install ? `Fix: ${cap.install}. ` : ""}Or waive '${id}' in slate.config.yml capabilities.waive.`
 
+  const env = projectEnv(ctx.root)
+  // Variables first: a tool whose key is missing is reported once, as the missing key.
+  const envNeeded = new Map(req.env)
+  for (const id of req.tools.keys()) for (const k of pack.capabilities[id]?.env ?? []) {
+    if (!envNeeded.has(k)) envNeeded.set(k, new Set())
+    envNeeded.get(k)!.add(`tool ${id}`)
+  }
+  const missingEnv = new Set<string>()
+  for (const [name, who] of envNeeded) {
+    if (skip.has(name)) {
+      usedWaivers.add(name)
+      continue
+    }
+    checked.push(`$${name}`)
+    if (env[name] !== undefined) continue
+    missingEnv.add(name)
+    const hint = req.envHints.get(name)
+    problems.push(`${name} is not set, and ${whoList(who)} needs it${hint ? ` (${hint})` : ""}. Fix: export it in the shell that runs Slate, or add \`${name}=...\` to the project's .env (keep .env out of git). Or waive '${name}'.`)
+  }
+
   const tools = [...req.tools.keys()].filter((t) => {
     if (skip.has(t)) usedWaivers.add(t)
     return !skip.has(t)
@@ -270,15 +334,19 @@ export async function preflight(ctx: CheckContext, pack: LoadedPack, req: Requir
         problems.push(`tool '${id}' has no capabilities/${id}.yml. Needed by ${whoList(req.tools.get(id))}.`)
         return
       }
+      if (cap.env.some((k) => missingEnv.has(k))) return
+      const core = ctx.core?.dir ?? cap.packDir
+      const run = cap.check ?? MCP_PROBE
+      const keys = Object.fromEntries(cap.env.map((k) => [k, env[k]!]))
       const r = await runScript({
-        script: { id: `capability ${id}`, description: cap.description, run: cap.check, timeout: cap.timeout, timeoutMs: cap.timeoutMs, requires: { tools: [], model: { input: [], output: [] } } },
-        packDir: cap.packDir,
+        script: { id: `capability ${id}`, description: cap.description, run, timeout: cap.timeout, timeoutMs: cap.timeoutMs, requires: { tools: [], model: { input: [], output: [] }, env: [] } },
+        packDir: cap.check ? cap.packDir : core,
         workspace: ctx.root,
         args: [],
         vars: { workspace: ctx.root },
         run: ctx.runId,
         // The check drives the MCP server itself, so a server that starts but cannot work fails here.
-        extraEnv: cap.mcp && !skip.has(id) ? { SLATE_MCP_COMMAND: JSON.stringify(cap.mcp.command) } : undefined,
+        extraEnv: { ...keys, ...(cap.mcp ? { SLATE_MCP_COMMAND: JSON.stringify(cap.mcp.command) } : {}) },
       })
       checked.push(id)
       const ok = r.ok && r.json?.ok !== false
@@ -286,7 +354,7 @@ export async function preflight(ctx: CheckContext, pack: LoadedPack, req: Requir
     }),
   )
 
-  const servers = mcpServers(pack, req, skip)
+  const servers = mcpServers(pack, req, skip, env).filter((s) => !(pack.capabilities[s.name]?.env ?? []).some((k) => missingEnv.has(k)))
   if (servers.length) {
     const timeout = Math.max(...servers.map((s) => s.startup)) * 1000
     const status = await ctx.runtime.mcpStatus(
@@ -330,7 +398,7 @@ export async function preflight(ctx: CheckContext, pack: LoadedPack, req: Requir
 /** The ids a step's agent and skill require that are waived: the step is told to do without them. */
 export function waivedFor(engine: Engine, agent: AgentSpec, skill: SkillSpec): string[] {
   const skip = waived(engine)
-  const ids = [...agent.requires.tools, ...skill.requires.tools, ...[agent.requires, skill.requires].flatMap((r) => [...r.model.input.map((m) => modalityId(m, "input")), ...r.model.output.map((m) => modalityId(m, "output"))])]
+  const ids = [...agent.requires.tools, ...skill.requires.tools, ...agent.requires.env, ...skill.requires.env, ...[agent.requires, skill.requires].flatMap((r) => [...r.model.input.map((m) => modalityId(m, "input")), ...r.model.output.map((m) => modalityId(m, "output"))])]
   return [...new Set(ids.filter((i) => skip.has(i)))]
 }
 

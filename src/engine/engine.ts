@@ -34,6 +34,8 @@ export class Engine {
   mcpNames: string[] = []
   /** Tools every worker may use: those of the skills and capabilities discovery's needs map. */
   sharedTools = new Set<string>()
+  /** Skills discovery's needs map to (skill id -> need id): workers are told to use them. */
+  needSkills = new Map<string, string>()
 
   constructor(public readonly o: EngineOptions) {
     this.pack = o.pack

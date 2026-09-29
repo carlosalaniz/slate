@@ -26,6 +26,18 @@ describe("gitignore", () => {
     expect(ignored(".slate/opencode.db")).toBe(true)
     expect(ignored(".opencode/agents/slate-discovery.md")).toBe(true)
     expect(ignored(".slate/brief.md")).toBe(false)
+    expect(ignored(".slate/installed/lock.yaml")).toBe(false)
+    expect(ignored(".slate/installed/skills/tts/SKILL.md")).toBe(false)
     expect(ignored("slate.config.yml")).toBe(false)
+  })
+
+  test("a block from an older Slate gets the lines it lacks", async () => {
+    const root = await tmpProject()
+    const file = path.join(root, ".gitignore")
+    await writeFile(file, "dist/\n\n# Slate (added by slate init)\n.slate/*\n!.slate/brief.md\n!.slate/plan-revisions.md\n.opencode/agents/slate-*.md\n\n# mine\n*.log\n")
+    expect(await ensureGitignore(root)).toBe(true)
+    expect(await ensureGitignore(root)).toBe(false)
+    const text = await Bun.file(file).text()
+    expect(text).toContain(".opencode/agents/slate-*.md\n!.slate/installed/\n\n# mine")
   })
 })

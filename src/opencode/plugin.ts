@@ -69,6 +69,11 @@ export function consultToolText(core: CorePack): { description: string; agent: s
 export async function writeSkillFiles(job: JobContext): Promise<Record<string, string>> {
   const out: Record<string, string> = {}
   for (const s of Object.values(allSkills(job))) {
+    // A standard skill folder is loaded where it is, so its references and scripts resolve.
+    if (s.dir) {
+      out[s.id] = path.join(s.dir, "SKILL.md")
+      continue
+    }
     const p = path.join(job.root, ".slate", "skills", s.id, "SKILL.md")
     const content = stringifyFrontmatter({ name: s.id, description: s.description }, `\n${s.prompt}\n`)
     if (!(await isFile(p))) await writeText(p, content)

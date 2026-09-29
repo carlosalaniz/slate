@@ -24,7 +24,8 @@ cd my-project
 slate init                            # config, then discovery opens in OpenCode: talk it through, then quit
 slate discover                        # reopen discovery if you quit before it was done
 slate start                           # plan and build; asks supervised (here) or unattended (background)
-slate check                           # what the job needs (tools, image input, discovery's needs), checked for free
+slate check                           # what the job needs (tools, image input, keys, discovery's needs), checked for free
+slate skill find                      # a need nothing covers? search skills.sh + the MCP Registry, pick, installed
 slate status                          # where the job is, what it needs from you, what it cost
 slate inbox                           # answer open questions one at a time
 slate log s1-t1                       # why a task looks the way it does
@@ -210,7 +211,21 @@ maps what the product takes beyond code (sound, images, ...) to an installed `sk
 `capability:`; a need mapped to nothing halts the job before planning, and the tools of mapped
 skills go to every worker. `.slate/capabilities.md` lists the installed skills and tools for
 discovery. In `slate.config.yml`, `capabilities.waive` lists tool ids, modality ids
-(`image-input`, `audio-output`, ...) and need ids to go without.
+(`image-input`, `audio-output`, ...), variable names and need ids to go without.
+`requires.env` lists variables that must be set (API keys), exported or in the project's `.env`;
+Slate exports the ones a job needs from `.env` so agents' shells see them. A capability may omit
+`check` when it has `mcp`: the check is then the MCP handshake (initialize and `tools/list`).
+
+Skills can be Slate YAML (`skills/<id>.yml`) or standard skill folders (`skills/<id>/SKILL.md`,
+agentskills.io), read as written; a folder skill's requirements come from `metadata.slate.requires`
+and from `metadata.<any>.requires.env`. A project can also install skills and tools from
+marketplaces: `slate skill find` searches skills.sh (skill folders in GitHub repositories) and the
+official MCP Registry (local servers from npm or PyPI) for a need nothing covers, you pick one and
+read what it ships (scripts, the command a tool runs, the keys it reads), and Slate copies it into
+`.slate/installed/` at a pinned commit or version (`lock.yaml`, committed with the project), maps
+the need to it and runs `slate check`. Installed skills and tools join whatever pack the job uses;
+workers are told which installed skills cover the product's needs. `marketplace:` in
+`slate.config.yml` points at other indexes with the same APIs.
 
 `slate pack validate <dir>` checks schemas, every id reference (including required tools), and roles
 (only workers run steps, reviewers never consult).

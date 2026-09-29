@@ -8,7 +8,7 @@ import { jobContext, baseVars, loadPinnedPack } from "./prepare.ts"
 import { runIntake } from "./intake.ts"
 import { runSequence } from "./sequence.ts"
 import { watchControl, stopJob } from "./control.ts"
-import { checkContextOf, collectRequirements, mcpServers, preflight, waived, writeCatalog } from "./capabilities.ts"
+import { checkContextOf, collectRequirements, mcpServers, preflight, projectEnv, waived, writeCatalog } from "./capabilities.ts"
 import type { LoadedPack, Phase } from "./types.ts"
 
 /**
@@ -33,7 +33,7 @@ export async function runJob(engine: Engine): Promise<JobState> {
     const startedIn = engine.state.phase
     const req = await collectRequirements(checkContextOf(engine), pack, startedIn)
     engine.sharedTools = req.sharedTools
-    engine.mcpNames = mcpServers(pack, req, waived(engine)).map((s) => s.name)
+    engine.mcpNames = mcpServers(pack, req, waived(engine), projectEnv(engine.o.root)).map((s) => s.name)
     await engine.o.runtime.start(jobContext(engine, pack))
     await writeCatalog(engine.o.root, pack, engine.core)
     await requireCapabilities(engine, pack, req)
@@ -83,10 +83,14 @@ export async function runJob(engine: Engine): Promise<JobState> {
  */
 async function requireCapabilities(engine: Engine, pack: LoadedPack, req: Awaited<ReturnType<typeof collectRequirements>>): Promise<void> {
   for (const t of req.sharedTools) engine.sharedTools.add(t)
-  const servers = mcpServers(pack, req, waived(engine))
+  for (const [skill, need] of req.needSkills) engine.needSkills.set(skill, need)
+  const servers = mcpServers(pack, req, waived(engine), projectEnv(engine.o.root))
   for (const s of servers) if (!engine.mcpNames.includes(s.name)) engine.mcpNames.push(s.name)
   await engine.o.runtime.ensureMcp(servers)
   const r = await preflight(checkContextOf(engine), pack, req)
+  // Agents' shells get Slate's environment: the keys the job needs, from the project's .env when not exported.
+  const env = projectEnv(engine.o.root)
+  for (const k of [...req.env.keys(), ...[...req.tools.keys()].flatMap((t) => pack.capabilities[t]?.env ?? [])]) if (process.env[k] === undefined && env[k] !== undefined) process.env[k] = env[k]
   engine.o.audit.append({ type: "preflight", ok: r.ok, checked: r.checked, waived: r.waived, problems: r.problems })
   if (r.checked.length) engine.log(`requirements checked: ${r.checked.join(", ")}${r.waived.length ? `; waived: ${r.waived.join(", ")}` : ""}`)
   if (r.ok) return

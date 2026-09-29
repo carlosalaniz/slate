@@ -87,7 +87,7 @@ export async function buildEngine(p: ProjectCtx, store: StateStore, opts: RunOpt
   if (ref) {
     const found = state.job.pack?.dir && !opts.packRef ? { dir: state.job.pack.dir } : await findPack(ref, p.root)
     if (!found) throw new CliError(`pack '${ref}' is not installed`, "run `slate pack list`, or `slate pack add <dir>`")
-    pack = await loadPack(found.dir, p.config.config)
+    pack = await loadPack(found.dir, p.config.config, { projectRoot: p.root })
   }
   return new Engine({
     root: p.root,
