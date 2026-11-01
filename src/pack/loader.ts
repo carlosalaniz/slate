@@ -316,6 +316,10 @@ export interface LockEntry {
   path?: string
   /** Keys a skill reads without declaring them, found at install: checked like declared ones. */
   env?: string[]
+  /** Programs a skill runs, found at install: each must be on PATH, checked like keys. */
+  commands?: { name: string; install?: string; alternatives?: number; installDocs?: string; login?: string }[]
+  /** The outside service a skill works through. */
+  service?: string
   installed: string
 }
 
@@ -336,7 +340,11 @@ async function readInstalled(root: string, problems: string[]): Promise<{ skills
     const s = entry.kind === "skill" ? skills[entry.id] : undefined
     if (!s) continue
     s.source = { repo: entry.source, commit: entry.version, path: entry.path ?? "" }
-    s.requires = { ...s.requires, env: [...new Set([...s.requires.env, ...(entry.env ?? [])])] }
+    const commands = entry.commands ?? []
+    s.requires = { ...s.requires, env: [...new Set([...s.requires.env, ...(entry.env ?? [])])], commands: [...new Set([...s.requires.commands, ...commands.map((c) => c.name)])] }
+    if (entry.service) s.service = entry.service
+    const hints = commands.map((c) => [c.name, [c.install ? `\`${c.install}\`` : `install it${c.installDocs ? ` (${c.installDocs})` : ""}`, ...(c.login ? [`\`${c.login}\``] : [])].join(", then ")] as const)
+    if (hints.length) s.commandHints = Object.fromEntries(hints)
   }
   return { skills, capabilities }
 }

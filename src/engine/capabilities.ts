@@ -16,13 +16,15 @@ import { runScript } from "./scripts.ts"
  * Agents, skills and scripts declare `requires: { tools: [...], model: { input: [...], output: [...] } }`.
  * Tools are capability ids (`capabilities/<id>.yml` in the pack or slate-core): each has a `check`
  * that costs nothing to run and, optionally, an MCP server Slate registers for the agents that
- * require it. Model modalities are read from OpenCode's model catalog. The pack's `needs` file,
+ * require it. Model modalities are read from OpenCode's model catalog. `env` keys must be set and
+ * `commands` must be on PATH. The pack's `needs` file,
  * written in discovery, maps what the product takes (sound, images, ...) to installed skills or
  * capabilities; a need nothing covers halts the job before planning.
  *
  * Anything listed in `capabilities.waive` in slate.config.yml is gone without instead: it is not
  * checked, and the agents are told it is unavailable. Model modalities are waived as
- * `<modality>-input` / `<modality>-output` (e.g. `image-input`), discovery needs by their id.
+ * `<modality>-input` / `<modality>-output` (e.g. `image-input`), discovery needs, keys and commands
+ * by their name.
  */
 
 export interface ModelNeed {
@@ -48,10 +50,14 @@ export interface Requirements {
   env: Map<string, Set<string>>
   /** What a skill says about itself (its `compatibility` line), shown with a missing variable. */
   envHints: Map<string, string>
+  /** Program -> who needs it on PATH (a service's CLI). */
+  commands: Map<string, Set<string>>
+  /** How to get a program (its install line, then its login), shown when it is missing. */
+  commandHints: Map<string, string>
 }
 
 export function emptyRequirements(): Requirements {
-  return { tools: new Map(), sessionTools: new Set(), sharedTools: new Set(), models: [], needProblems: [], needSkills: new Map(), env: new Map(), envHints: new Map() }
+  return { tools: new Map(), sessionTools: new Set(), sharedTools: new Set(), models: [], needProblems: [], needSkills: new Map(), env: new Map(), envHints: new Map(), commands: new Map(), commandHints: new Map() }
 }
 
 /**
@@ -78,6 +84,14 @@ function addEnv(req: Requirements, names: string[], who: string, hint?: string):
     if (!req.env.has(n)) req.env.set(n, new Set())
     req.env.get(n)!.add(who)
     if (hint && !req.envHints.has(n)) req.envHints.set(n, hint)
+  }
+}
+
+function addCommands(req: Requirements, names: string[], who: string, hints: Record<string, string> = {}): void {
+  for (const n of names) {
+    if (!req.commands.has(n)) req.commands.set(n, new Set())
+    req.commands.get(n)!.add(who)
+    if (hints[n] && !req.commandHints.has(n)) req.commandHints.set(n, hints[n])
   }
 }
 
@@ -159,11 +173,14 @@ export async function collectRequirements(ctx: CheckContext, pack: LoadedPack, f
       addModel([agent.requires, skill.requires], who, step.model ?? agent.model)
       addEnv(req, agent.requires.env, who)
       addEnv(req, skill.requires.env, who, skill.compatibility)
+      addCommands(req, agent.requires.commands, who)
+      addCommands(req, skill.requires.commands, who, skill.commandHints)
       for (const c of step.consult?.agents ?? []) {
         const consultant = agentOf(c)
         if (!consultant) continue
         addTools(consultant.requires.tools, `${where} (consultant ${c})`, true)
         addEnv(req, consultant.requires.env, `${where} (consultant ${c})`)
+        addCommands(req, consultant.requires.commands, `${where} (consultant ${c})`)
         addModel([consultant.requires], `${where} (consultant ${c})`, consultant.model)
       }
     } else if (step.type === "script") script(step.script, where)
@@ -205,6 +222,7 @@ async function addNeeds(ctx: Pick<CheckContext, "root" | "project" | "core">, pa
       }
       req.needSkills.set(skill.id, need.id)
       addEnv(req, skill.requires.env, `skill ${skill.id} for ${who}`, skill.compatibility)
+      addCommands(req, skill.requires.commands, `skill ${skill.id} for ${who}`, skill.commandHints)
       for (const t of skill.requires.tools) req.sharedTools.add(t)
       const tools = skill.requires.tools
       for (const t of tools) {
@@ -323,6 +341,18 @@ export async function preflight(ctx: CheckContext, pack: LoadedPack, req: Requir
     problems.push(`${name} is not set, and ${whoList(who)} needs it${hint ? ` (${hint})` : ""}. Fix: export it in the shell that runs Slate, or add \`${name}=...\` to the project's .env (keep .env out of git). Or waive '${name}'.`)
   }
 
+  // Programs on the PATH steps run with. A login the program needs cannot be checked for free: the fix names it.
+  for (const [name, who] of req.commands) {
+    if (skip.has(name)) {
+      usedWaivers.add(name)
+      continue
+    }
+    checked.push(`command ${name}`)
+    if (Bun.which(name, { PATH: env.PATH ?? "" })) continue
+    const hint = req.commandHints.get(name)
+    problems.push(`\`${name}\` is not on PATH, and ${whoList(who)} runs it. Fix: ${hint ? `${hint}` : `install it`} in the shell that runs Slate. Or waive '${name}'.`)
+  }
+
   const tools = [...req.tools.keys()].filter((t) => {
     if (skip.has(t)) usedWaivers.add(t)
     return !skip.has(t)
@@ -339,7 +369,7 @@ export async function preflight(ctx: CheckContext, pack: LoadedPack, req: Requir
       const run = cap.check ?? MCP_PROBE
       const keys = Object.fromEntries(cap.env.map((k) => [k, env[k]!]))
       const r = await runScript({
-        script: { id: `capability ${id}`, description: cap.description, run, timeout: cap.timeout, timeoutMs: cap.timeoutMs, requires: { tools: [], model: { input: [], output: [] }, env: [] } },
+        script: { id: `capability ${id}`, description: cap.description, run, timeout: cap.timeout, timeoutMs: cap.timeoutMs, requires: { tools: [], model: { input: [], output: [] }, env: [], commands: [] } },
         packDir: cap.check ? cap.packDir : core,
         workspace: ctx.root,
         args: [],
@@ -398,7 +428,7 @@ export async function preflight(ctx: CheckContext, pack: LoadedPack, req: Requir
 /** The ids a step's agent and skill require that are waived: the step is told to do without them. */
 export function waivedFor(engine: Engine, agent: AgentSpec, skill: SkillSpec): string[] {
   const skip = waived(engine)
-  const ids = [...agent.requires.tools, ...skill.requires.tools, ...agent.requires.env, ...skill.requires.env, ...[agent.requires, skill.requires].flatMap((r) => [...r.model.input.map((m) => modalityId(m, "input")), ...r.model.output.map((m) => modalityId(m, "output"))])]
+  const ids = [...agent.requires.tools, ...skill.requires.tools, ...agent.requires.env, ...skill.requires.env, ...agent.requires.commands, ...skill.requires.commands, ...[agent.requires, skill.requires].flatMap((r) => [...r.model.input.map((m) => modalityId(m, "input")), ...r.model.output.map((m) => modalityId(m, "output"))])]
   return [...new Set(ids.filter((i) => skip.has(i)))]
 }
 
@@ -418,12 +448,22 @@ export async function writeCatalog(root: string, pack: LoadedPack, core?: Loaded
   const lines = ["# Installed skills and tools", "", "## Skills", ""]
   for (const s of Object.values(skills).sort((a, b) => a.id.localeCompare(b.id))) {
     const tools = s.requires.tools.length ? ` (tools: ${s.requires.tools.join(", ")})` : ""
-    lines.push(`- \`${s.id}\`: ${s.description || "(no description)"}${tools}`)
+    lines.push(withSetup(`- \`${s.id}\`: ${s.description || "(no description)"}${tools}`, s.service, s.requires.env, s.requires.commands, s.commandHints))
   }
   lines.push("", "## Tools (capabilities)", "")
-  for (const c of Object.values(pack.capabilities).sort((a, b) => a.id.localeCompare(b.id))) lines.push(`- \`${c.id}\`: ${c.description || "(no description)"}`)
+  for (const c of Object.values(pack.capabilities).sort((a, b) => a.id.localeCompare(b.id))) lines.push(withSetup(`- \`${c.id}\`: ${c.description || "(no description)"}`, undefined, c.env, []))
   const file = path.join(root, ".slate", "capabilities.md")
   await writeText(file, lines.join("\n") + "\n")
   return file
+}
+
+/** A catalog line with what the skill or tool takes before it works, as discovery tells the person: its service, keys, programs. */
+function withSetup(line: string, service: string | undefined, env: string[], commands: string[], hints: Record<string, string> = {}): string {
+  const parts = [
+    ...(service ? [`works through ${service}`] : []),
+    ...(env.length ? [`needs ${env.join(", ")} set`] : []),
+    ...commands.map((c) => `needs \`${c}\` on PATH${hints[c] ? ` (${hints[c]})` : ""}`),
+  ]
+  return parts.length ? `${line.replace(/[.\s]+$/, "")}. Setup: ${parts.join("; ")}.` : line
 }
 

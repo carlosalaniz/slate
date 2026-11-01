@@ -3,7 +3,7 @@ import path from "node:path"
 import { mkdir, writeFile, readFile } from "node:fs/promises"
 import YAML from "yaml"
 import { harness, referencePackDir, tmpProject, testConfig } from "./helpers.ts"
-import { fetchSkill, installSkill, installTool, mapNeed, searchSkills, searchTools, secretsRead, serviceOf, setupCommands, toolId } from "../src/marketplace/marketplace.ts"
+import { fetchSkill, installSkill, installTool, mapNeed, searchSkills, searchTools, secretsRead, serviceOf, setupCommands, setupSteps, skillCommands, toolId } from "../src/marketplace/marketplace.ts"
 import { loadPack, readLock } from "../src/pack/loader.ts"
 import { saveProjectConfig } from "../src/config/project.ts"
 
@@ -38,6 +38,8 @@ async function skillRepo(): Promise<string> {
   await mkdir(path.join(skill, "scripts"), { recursive: true })
   await writeFile(path.join(skill, "SKILL.md"), "---\nname: tts\ndescription: Speak text with Acme.\ncompatibility: Needs an Acme key.\nmetadata: {\"openclaw\": {\"requires\": {\"env\": [\"ACME_API_KEY\"]}}}\n---\n\n# Acme TTS\n\nconst key = process.env.ACME_EXTRA_TOKEN\n")
   await writeFile(path.join(skill, "scripts", "speak.sh"), "#!/bin/sh\necho hi\n")
+  await mkdir(path.join(repo, "skills", "music"), { recursive: true })
+  await writeFile(path.join(repo, "skills", "music", "SKILL.md"), "---\nname: music\ndescription: Songs through the Acme CLI.\nhomepage: https://www.acme-music.com\nallowed-tools: Bash(acmemusic *)\n---\n\n```bash\nnpm i -g @acmemusic/cli\nacmemusic login\nacmemusic run song\n```\n")
   git(repo, "init", "-q", "-b", "main")
   git(repo, "add", "-A")
   git(repo, "commit", "-qm", "skill")
@@ -57,7 +59,28 @@ describe("marketplace search", () => {
     expect(serviceOf("https://www.runcomfy.com", [])).toBe("runcomfy.com")
     expect(serviceOf(undefined, ["see https://docs.deepgram.com/a, https://api.deepgram.com/v1 and https://github.com/x/y"])).toBe("deepgram.com")
     expect(serviceOf(undefined, ["one link https://example.com only"])).toBeUndefined()
+    expect(serviceOf("https://developers.deepgram.com/docs", [])).toBe("deepgram.com")
+    expect(serviceOf("https://api.acme.co.uk", [])).toBe("acme.co.uk")
     expect(setupCommands("```bash\nnpm i -g @runcomfy/cli    # global\nnpx -y @runcomfy/cli --version\nruncomfy login\n$ brew install ffmpeg\n```")).toEqual(["npm i -g @runcomfy/cli", "runcomfy login", "brew install ffmpeg"])
+  })
+
+  test("a CLI the skill works through is a command; a CLI next to SDK examples is one way among several", () => {
+    // RunComfy-shaped: allowed-tools names the CLI; the install alternatives collapse to the first.
+    const runcomfy = "```bash\nnpx skills add acme/skills --skill music -g\n```\n```bash\nnpm i -g @runcomfy/cli   # global\nnpx -y @runcomfy/cli --version\nruncomfy login\nruncomfy run music \\\n  --prompt calm\n```"
+    const commands = skillCommands(runcomfy, "Bash(runcomfy *)", [runcomfy, "```bash\nbrew install runcomfy/tap/runcomfy\npip install runcomfy\n```"])
+    expect(commands).toEqual([{ name: "runcomfy", install: "npm i -g @runcomfy/cli", alternatives: 1, login: "runcomfy login" }])
+    expect(setupSteps(runcomfy, commands)).toEqual(["npm i -g @runcomfy/cli (or 1 other way in its docs)", "runcomfy login"])
+    // Without allowed-tools, shell-only examples still name it; package managers never count.
+    expect(skillCommands(runcomfy, undefined).map((c) => c.name)).toEqual(["runcomfy"])
+    // ElevenLabs-shaped: Python and JS do the work, the CLI is an alternative; prose setup is kept.
+    const eleven = "> **Setup, before writing any code:** if `ELEVENLABS_API_KEY` isn't set, run `npx -y @elevenlabs/cli@latest onboard init`.\n```python\nfrom elevenlabs import ElevenLabs\n```\n```bash\nelevenlabs text-to-sound-effects convert\n```"
+    expect(skillCommands(eleven, undefined, [eleven, "```bash\nnpm install -g @elevenlabs/cli\nelevenlabs auth login\n```"])).toEqual([])
+    expect(setupSteps(eleven, [])).toEqual(["npx -y @elevenlabs/cli@latest onboard init"])
+    // inference.sh-shaped: no install line, only a link to instructions.
+    const belt = "> Requires inference.sh CLI (`belt`). [Install instructions](https://example.com/cli-install.md)\n```bash\nbelt login\nbelt app run x\n```"
+    const beltCommands = skillCommands(belt, "Bash(belt *)")
+    expect(beltCommands).toEqual([{ name: "belt", installDocs: "https://example.com/cli-install.md", login: "belt login" }])
+    expect(setupSteps(belt, beltCommands)).toEqual(["install belt: https://example.com/cli-install.md", "belt login"])
   })
 
   test("the keys a skill's text reads are found", () => {
@@ -82,6 +105,20 @@ describe("installing", () => {
     expect(skill.requires.env.sort()).toEqual(["ACME_API_KEY", "ACME_EXTRA_TOKEN"])
     expect(skill.prompt).toContain("# Acme TTS")
     expect(skill.source?.commit).toBe(lock[0]!.version)
+    expect(skill.requires.commands).toEqual([])
+  })
+
+  test("the programs a skill runs and its service are recorded at install and required when it loads", async () => {
+    const repo = await skillRepo()
+    const root = await tmpProject()
+    const fetched = await fetchSkill(repo, "music")
+    expect(fetched).toMatchObject({ service: "acme-music.com", commands: [{ name: "acmemusic", install: "npm i -g @acmemusic/cli", login: "acmemusic login" }], setup: ["npm i -g @acmemusic/cli", "acmemusic login"] })
+    await installSkill(root, fetched)
+    await fetched.dispose()
+    const skill = (await loadPack(referencePackDir(), {}, { projectRoot: root })).skills.music!
+    expect(skill.requires.commands).toEqual(["acmemusic"])
+    expect(skill.service).toBe("acme-music.com")
+    expect(skill.commandHints).toEqual({ acmemusic: "`npm i -g @acmemusic/cli`, then `acmemusic login`" })
   })
 
   test("a tool becomes a capability whose check is the MCP handshake", async () => {

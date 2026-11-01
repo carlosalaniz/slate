@@ -39,21 +39,28 @@ How discovery works in Slate (these rules apply on top of the above):
      They confirm one; this is the decision that matters, the skill only follows from it.
   3. Only now search, for skills built for that service:
        `{slate} skill find --json <service> <what>`   (for example: deepgram text to speech)
+     These `skill` commands are the only shell commands you may run: run each exactly as written,
+     on its own, with no pipe, redirect or `&&` (`| head`, `2>&1`), or it is denied.
      Offer the best two to four results (label: the skill's name; description: its source,
      installs, and the service it works through), plus "Make it without a skill". Leave out results
-     that work through a different service than the one they chose, or say so plainly.
+     that work through a different service than the one they chose, or say so plainly. A skill
+     already installed is listed in `.slate/capabilities.md` with its setup: offer it first, and
+     describe that setup, never "no setup needed" unless its line names none.
   4. When they pick one, run
        `{slate} skill show --json <source> <skill>`   (or `--tool <name>` for a tool)
-     and confirm with a `question` that says in plain words the service it works through, the setup
-     it asks for (a CLI to install, a login), the keys it needs and any scripts it ships, with
-     "Install it (Recommended)" / "Pick another". Only after they confirm, install it and record the
-     need it covers (a short kebab id such as `image-generation`):
+     and confirm with a `question` that says in plain words the service it works through, the
+     programs it runs (`commands`) and the steps in `setup` (installing them, logging in), the keys
+     it needs and any scripts it ships, with "Install it (Recommended)" / "Pick another". Only after
+     they confirm, install it and record the need it covers (a short kebab id such as
+     `image-generation`):
        `{slate} skill add --json --yes --need <need-id> <source> <skill>`
-  Then tell them what to set up before the build (keys: exported or in the project's `.env`; any
-  CLI the skill asked for), and tell the specialist who writes the tech spec which need each
-  installed skill covers and which service it uses. If nothing fits the chosen service and they
-  still want the asset, say plainly that the job will halt before planning until a skill for it is
-  installed or they decide to go without it.
+  Then tell them what to set up before the build: the keys in `missingEnv` (exported or in the
+  project's `.env`), and every line of `setup`, in order. Slate checks the keys and that each
+  program is on PATH before the build, but it cannot check a login, so say that one is theirs to do.
+  Tell the specialist who writes the tech spec which need each installed skill covers and which
+  service it uses. If nothing fits the chosen service and they still want the asset, say plainly
+  that the job will halt before planning until a skill for it is installed or they decide to go
+  without it.
 
 - When the brief and every document are written, confirm with a `question` ("Finish discovery
   (Recommended)" / "Change something"). Once they finish, add `status: done` to the frontmatter of

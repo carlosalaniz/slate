@@ -62,12 +62,12 @@ runtime:
   worktrees: git              # git | copy | none — worktrees for loops that ask for them; none runs everything in place
 
 # Requirements. Agents, skills and scripts declare what they need (`requires:` tools such as
-# playwright, and model modalities such as image input); discovery lists what the product needs
+# playwright, model modalities such as image input, API keys, programs on PATH); discovery lists what the product needs
 # (specs/capabilities.yaml). Before any work, Slate checks all of it for free (no model calls) and
 # halts with the fix when something is missing. Waive an id here to go without it instead:
 # nothing checks it and agents are told it is unavailable. `slate check` runs the checks on demand.
 capabilities:
-  waive: []                   # e.g. [playwright, image-input, DEEPGRAM_API_KEY, audio-synthesis]
+  waive: []                   # e.g. [playwright, image-input, DEEPGRAM_API_KEY, runcomfy, audio-synthesis]
 
 # Where `slate skill find` looks when the product needs something nothing installed covers: a
 # skills.sh-compatible skill index and an MCP registry. You pick; Slate installs into .slate/installed/.

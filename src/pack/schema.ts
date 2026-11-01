@@ -35,17 +35,20 @@ export type Modality = z.infer<typeof Modality>
  * What an agent, skill or script needs before it can do its work. `tools` are capability ids
  * (`capabilities/<id>.yml` in the pack or in slate-core); `model` lists modalities the model the
  * step runs on must accept (`input`) or produce (`output`); `env` lists environment variables that
- * must be set (API keys), in the environment or the project's `.env`. Slate checks all of it before
- * the job starts, without spending tokens, and halts when something is missing and not waived.
+ * must be set (API keys), in the environment or the project's `.env`; `commands` lists programs that
+ * must be on PATH (a service's CLI). Slate checks all of it before the job starts, without spending
+ * tokens, and halts when something is missing and not waived.
  */
 const EnvName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "env entries are variable names")
+const CommandName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._+-]*$/, "commands are program names, as typed in a shell")
 export const RequiresSchema = z
   .object({
     tools: z.array(Id).default([]),
     model: z.object({ input: z.array(Modality).default([]), output: z.array(Modality).default([]) }).default({ input: [], output: [] }),
     env: z.array(EnvName).default([]),
+    commands: z.array(CommandName).default([]),
   })
-  .default({ tools: [], model: { input: [], output: [] }, env: [] })
+  .default({ tools: [], model: { input: [], output: [] }, env: [], commands: [] })
 export type Requires = z.infer<typeof RequiresSchema>
 
 export const PermissionRuleSchema = z.object({
@@ -252,6 +255,10 @@ export interface SkillSpec extends SkillFile {
   source?: { repo: string; commit: string; path: string }
   /** The skill's own `compatibility` line, shown when its requirements are missing. */
   compatibility?: string
+  /** The outside service it works through (installed skills: found at install). */
+  service?: string
+  /** Command -> how to get it (install line, then login), shown when it is not on PATH. */
+  commandHints?: Record<string, string>
 }
 
 export const ScriptFileSchema = z.object({

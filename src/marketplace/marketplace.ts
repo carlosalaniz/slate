@@ -107,7 +107,9 @@ export interface FetchedSkill {
   envFound: string[]
   /** The outside service it works through, when it names one (its `homepage`, or the site it links to most). */
   service?: string
-  /** Setup it asks for before it works: installing a CLI or package, logging in. */
+  /** Programs it runs that must be on PATH, with how to get each: checked for free before a job. */
+  commands: SkillCommand[]
+  /** Setup it asks for before it works, one step per line: each command's install and login, and what SKILL.md says to run first. */
   setup: string[]
   /** Every file in the folder; scripts are the ones that can run code. */
   files: string[]
@@ -146,9 +148,11 @@ export async function fetchSkill(source: string, skillId: string): Promise<Fetch
     const texts = await Promise.all(files.filter((f) => /\.(md|txt)$/i.test(f)).map((f) => readText(path.join(found, f))))
     const envFound = [...new Set(texts.flatMap(secretsRead))].filter((k) => !env.has(k))
     const homepage = typeof data.homepage === "string" ? data.homepage : undefined
+    const commands = skillCommands(skillMd, data["allowed-tools"], texts)
     return {
       service: serviceOf(homepage, texts),
-      setup: [...new Set(texts.flatMap(setupCommands))].slice(0, 6),
+      commands,
+      setup: setupSteps(skillMd, commands),
       id: skillId,
       source,
       commit,
@@ -174,9 +178,12 @@ const NOT_SERVICES = /(^|\.)(github\.com|githubusercontent\.com|skills\.sh|npmjs
 
 /** The service's site: the skill's `homepage`, else the host its text links to most (ignoring code hosts). */
 export function serviceOf(homepage: string | undefined, texts: string[]): string | undefined {
+  // The site, not the subdomain: developers.deepgram.com and api.deepgram.com are deepgram.com.
   const host = (u: string) => {
     try {
-      return new URL(u).hostname.replace(/^(www|docs|api)\./, "")
+      const labels = new URL(u).hostname.split(".")
+      const keep = labels.length > 2 && labels.at(-1)!.length === 2 && /^(co|com|org|net|ac|gov|edu)$/.test(labels.at(-2)!) ? 3 : 2
+      return labels.slice(-keep).join(".")
     } catch {
       return undefined
     }
@@ -197,6 +204,94 @@ export function setupCommands(text: string): string[] {
   const re = /^\s*\$?\s*((?:npm (?:i|install) (?:-g|--global)|pnpm add -g|bun (?:add|install) -g|yarn global add|pip3? install|pipx install|uv tool install|brew install|cargo install|go install|gem install)\s+[^\s#`]+|curl [^\n#`]*\|\s*(?:ba)?sh|[a-z][a-z0-9-]* (?:login|auth login))/gm
   for (const m of text.matchAll(re)) out.push(m[1]!.trim())
   return out
+}
+
+/** A program a skill runs, which must be on PATH before a job uses it. */
+export interface SkillCommand {
+  name: string
+  /** The first way its text gives to install it. */
+  install?: string
+  /** How many other ways it gives (npm, brew, a script...). */
+  alternatives?: number
+  /** With no install line: the page its text links to for installing it. */
+  installDocs?: string
+  login?: string
+}
+
+/** Package managers, runtimes and shell builtins: what a skill uses to get or run things, not a service's CLI. */
+const GENERIC_COMMANDS = new Set(
+  "npm npx pnpm pnpx yarn bun bunx deno node python python3 pip pip3 pipx uv uvx brew cargo go gem curl wget git cd export echo cat ls mkdir cp mv rm sudo source chmod set unset which env open sh bash zsh scoop".split(" "),
+)
+const SDK_FENCES = /^```\s*(python|py|javascript|js|typescript|ts|jsx|tsx|go|rust|ruby|java|kotlin|swift|csharp|cs)\b/m
+
+/**
+ * The programs a skill must find on PATH: what its `allowed-tools` lets it run (`Bash(runcomfy *)`),
+ * else the CLI its SKILL.md shell examples run, when it shows no SDK code to do the work instead
+ * (a CLI next to Python and JavaScript examples is one way among several, not a requirement).
+ */
+export function skillCommands(skillMd: string, allowedTools: unknown, texts: string[] = [skillMd]): SkillCommand[] {
+  const allowed = (Array.isArray(allowedTools) ? allowedTools.join(" ") : typeof allowedTools === "string" ? allowedTools : "").matchAll(/Bash\(\s*([A-Za-z0-9][A-Za-z0-9._+-]*)/g)
+  let names = [...new Set([...allowed].map((m) => m[1]!))].filter((n) => !GENERIC_COMMANDS.has(n))
+  if (!names.length && !SDK_FENCES.test(skillMd)) names = shellCommands(skillMd)
+  const steps = texts.flatMap(setupCommands)
+  return names.map((name) => {
+    const installs = steps.filter((l) => installsProgram(l, name))
+    const login = steps.find((l) => l === `${name} login` || l === `${name} auth login`)
+    const docs = installs.length ? undefined : installLink(texts, name)
+    return { name, ...(installs[0] ? { install: installs[0] } : {}), ...(installs.length > 1 ? { alternatives: installs.length - 1 } : {}), ...(docs ? { installDocs: docs } : {}), ...(login ? { login } : {}) }
+  })
+}
+
+/** Commands the shell examples run (first word of each command line in bash/sh blocks), minus package managers. */
+function shellCommands(md: string): string[] {
+  const out = new Set<string>()
+  for (const block of md.matchAll(/^```\s*(?:bash|sh|shell|console|zsh)?\s*\n([\s\S]*?)^```/gm)) {
+    let continued = false
+    for (const line of block[1]!.split("\n")) {
+      const m = continued ? null : /^\s*(?:\$\s+)?([a-z][a-z0-9._-]*)(?=\s|$)/.exec(line)
+      continued = /\\\s*$/.test(line)
+      if (m && !GENERIC_COMMANDS.has(m[1]!)) out.add(m[1]!)
+    }
+  }
+  return [...out]
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+/** A link on a line that names the program and says how to install it: "Requires the CLI (`belt`). [Install instructions](https://...)". */
+function installLink(texts: string[], name: string): string | undefined {
+  for (const t of texts) for (const line of t.split("\n")) {
+    if (!/install/i.test(line) || !new RegExp(`\\b${escapeRe(name)}\\b`).test(line)) continue
+    const url = /\]\((https?:\/\/[^)\s]+)\)/.exec(line)?.[1]
+    if (url) return url
+  }
+  return undefined
+}
+
+/** Whether a setup line installs the program `name`: a global package named after it, or a script fetched from a URL naming it. */
+function installsProgram(line: string, name: string): boolean {
+  if (/^curl /.test(line)) return new RegExp(`[/.-]${escapeRe(name)}[/.-]`).test(line)
+  const pkg = /\s(\S+)$/.exec(line)?.[1]
+  if (!pkg || /^pip3? install/.test(line)) return false // a library, not a program
+  const bare = pkg.replace(/\[.*\]/, "").replace(/(?<=.)@[^/]*$/, "").replace(/==.*$/, "")
+  const [scope, last] = bare.startsWith("@") ? bare.slice(1).split("/") : [undefined, bare.split("/").pop()]
+  return [last, last?.replace(/-cli$/, ""), last === "cli" ? scope : undefined].includes(name)
+}
+
+/** What to set up, in order and without alternatives: each command's install and login, then what SKILL.md says to run first. */
+export function setupSteps(skillMd: string, commands: SkillCommand[]): string[] {
+  const out: string[] = []
+  for (const c of commands) {
+    if (c.install) out.push(`${c.install}${c.alternatives ? ` (or ${c.alternatives} other way${c.alternatives > 1 ? "s" : ""} in its docs)` : ""}`)
+    else if (c.installDocs) out.push(`install ${c.name}: ${c.installDocs}`)
+    if (c.login) out.push(c.login)
+  }
+  // Prose such as "Setup, before writing any code: run `npx -y @acme/cli onboard init`".
+  for (const line of skillMd.split("\n")) {
+    if (!/\bset ?up\b/i.test(line)) continue
+    for (const m of line.matchAll(/`([^`]+)`/g)) if (/^(npx|bunx|pnpx|uvx|npm|pip3?|pipx|uv|brew|curl)\s|^[a-z][a-z0-9-]* (login|auth login)\b/.test(m[1]!)) out.push(m[1]!)
+  }
+  return [...new Set(out)]
 }
 
 /** Secret-looking variables code in the text reads: `process.env.X`, `os.environ["X"]`, `os.getenv("X")`, `$X`. */
@@ -245,7 +340,17 @@ export async function installSkill(root: string, skill: FetchedSkill, id = skill
   const dest = path.join(installedDir(root), "skills", id)
   await rm(dest, { recursive: true, force: true })
   await cp(skill.dir, dest, { recursive: true })
-  await recordLock(root, { kind: "skill", id, source: skill.source, version: skill.commit, path: skill.path, ...(skill.envFound.length ? { env: skill.envFound } : {}), installed: new Date().toISOString() })
+  await recordLock(root, {
+    kind: "skill",
+    id,
+    source: skill.source,
+    version: skill.commit,
+    path: skill.path,
+    ...(skill.envFound.length ? { env: skill.envFound } : {}),
+    ...(skill.commands.length ? { commands: skill.commands } : {}),
+    ...(skill.service ? { service: skill.service } : {}),
+    installed: new Date().toISOString(),
+  })
   return dest
 }
 

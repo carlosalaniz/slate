@@ -20,7 +20,7 @@ describe("pack loader", () => {
       // ${config} in script args is resolved at load
       expect(lanes.steps[1]).toMatchObject({ type: "loop", over: { script: "next-ux-review", args: ["2"] }, concurrency: 1 })
       expect(r.pack.manifest.needs).toBe("specs/capabilities.yaml")
-      expect(r.pack.agents.builder!.requires).toEqual({ tools: ["playwright"], model: { input: ["image"], output: [] }, env: [] })
+      expect(r.pack.agents.builder!.requires).toEqual({ tools: ["playwright"], model: { input: ["image"], output: [] }, env: [], commands: [] })
     }
   })
 

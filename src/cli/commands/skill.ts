@@ -190,6 +190,7 @@ async function show(p: ProjectCtx, args: string[], flags: Record<string, string 
   const skill = out.json ? await fetchSkill(source, skillId) : await spin(`fetching ${source} › ${skillId}…`, fetchSkill(source, skillId))
   try {
     const keys = [...skill.env, ...skill.envFound]
+    const onPath = (c: string) => Bun.which(c, { PATH: env.PATH ?? "" }) !== null
     out.emit(() => skillReview(skill, env), {
       kind: "skill",
       id: skill.id,
@@ -200,6 +201,8 @@ async function show(p: ProjectCtx, args: string[], flags: Record<string, string 
       compatibility: skill.compatibility ?? null,
       service: skill.service ?? null,
       setup: skill.setup,
+      commands: skill.commands,
+      missingCommands: skill.commands.map((c) => c.name).filter((c) => !onPath(c)),
       env: keys,
       missingEnv: keys.filter((k) => env[k] === undefined),
       files: skill.files,
@@ -219,7 +222,8 @@ function skillReview(skill: FetchedSkill, env: Record<string, string>): string[]
     `skill ${skill.id} from ${skill.source} @ ${skill.commit.slice(0, 12)} (${skill.path || "repository root"})`,
     `  ${skill.description}`,
     ...(skill.service ? [`  works through: ${skill.service} (an outside service: its account, and its prices)`] : []),
-    ...(skill.setup.length ? [`  setup it asks for: ${skill.setup.join("; ")}`] : []),
+    ...skill.commands.map((c) => `  runs: ${c.name} (${Bun.which(c.name, { PATH: env.PATH ?? "" }) ? "on PATH" : "not on PATH"}; Slate checks it before a job)`),
+    ...(skill.setup.length ? ["  setup it asks for, in order:", ...skill.setup.map((l) => `    ${l}`)] : []),
     ...(skill.compatibility ? [`  compatibility: ${skill.compatibility}`] : []),
     ...(skill.env.length ? [`  needs: ${skill.env.map(state).join(", ")}`] : []),
     ...(skill.envFound.length ? [`  reads (found in its text; Slate will check them): ${skill.envFound.map(state).join(", ")}`] : []),
@@ -259,7 +263,7 @@ async function installSkillFlow(p: ProjectCtx, ctx: Awaited<ReturnType<typeof co
   try {
     if (!(await confirm(out, yes, skillReview(skill, projectEnv(p.root))))) return 1
     const dest = await installSkill(p.root, skill, id)
-    return finish(p, ctx, { skill: id }, need, `installed skill ${id} into ${path.relative(p.root, dest)}`, [...skill.env, ...skill.envFound], out)
+    return finish(p, ctx, { skill: id }, need, `installed skill ${id} into ${path.relative(p.root, dest)}`, [...skill.env, ...skill.envFound], out, skill.setup, skill.commands.map((c) => c.name))
   } finally {
     await skill.dispose()
   }
@@ -273,7 +277,7 @@ async function installToolFlow(p: ProjectCtx, ctx: Awaited<ReturnType<typeof con
   return finish(p, ctx, { capability: id }, need, `installed tool ${id} into ${path.relative(p.root, file)}`, tool.env, out)
 }
 
-async function finish(p: ProjectCtx, ctx: Awaited<ReturnType<typeof context>>, target: { skill?: string; capability?: string }, need: Need | undefined, done: string, env: string[], out: Output): Promise<number> {
+async function finish(p: ProjectCtx, ctx: Awaited<ReturnType<typeof context>>, target: { skill?: string; capability?: string }, need: Need | undefined, done: string, env: string[], out: Output, setup: string[] = [], commands: string[] = []): Promise<number> {
   const lines = [done]
   if (need && ctx.needsFile) {
     await mapNeed(p.root, ctx.needsFile, need.id, target, need.for)
@@ -284,7 +288,9 @@ async function finish(p: ProjectCtx, ctx: Awaited<ReturnType<typeof context>>, t
   const values = projectEnv(p.root)
   const missing = env.filter((k) => values[k] === undefined)
   if (missing.length) lines.push(`set ${missing.join(", ")} (export it, or add it to the project's .env and keep .env out of git)`)
-  out.emit(() => lines, { installed: target, need: need?.id ?? null, missingEnv: missing })
+  const missingCommands = commands.filter((c) => !Bun.which(c, { PATH: values.PATH ?? "" }))
+  if (setup.length) lines.push("before the build, set it up (Slate checks the programs, but cannot check a login):", ...setup.map((l) => `  ${l}`))
+  out.emit(() => lines, { installed: target, need: need?.id ?? null, missingEnv: missing, missingCommands, setup })
   if (!ctx.pack || out.json) return 0
   out.line("")
   return runCommand("check", [], out)

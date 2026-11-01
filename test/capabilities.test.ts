@@ -49,7 +49,7 @@ describe("requirements: loading", () => {
     await expect(loadPack(await packWith({ agents: worker({ tools: ["nope"] }) }))).rejects.toThrow(/requires unknown tool 'nope'/)
     const pack = await loadPack(await packWith({ skills: { make: { ...BASIC_SKILLS.make, requires: { tools: ["playwright"], model: { input: ["image"] } } } } }))
     expect(pack.capabilities.playwright?.mcp?.command).toContain("@playwright/mcp@latest")
-    expect(pack.skills.make!.requires).toEqual({ tools: ["playwright"], model: { input: ["image"], output: [] }, env: [] })
+    expect(pack.skills.make!.requires).toEqual({ tools: ["playwright"], model: { input: ["image"], output: [] }, env: [], commands: [] })
   })
 
   test("capability code belongs in capabilities/scripts/", async () => {
@@ -158,11 +158,24 @@ describe("requirements: what discovery says the product needs", () => {
     expect(missing.st.stopReason).toContain("specs/capabilities.yaml is missing")
   })
 
+  test("a program a mapped skill runs must be on PATH: missing halts with how to get it; waived or present runs", async () => {
+    const song = (command: string) => ({ "make-song": { description: "Songs via a CLI", requires: { commands: [command] }, prompt: "make a song" } })
+    const files = needs([{ id: "music", skill: "make-song" }])
+    const halted = await run(await needsPack(song("slate-no-such-cli")), { files })
+    expect(halted.st.status).toBe("stopped")
+    expect(halted.st.stopReason).toContain("`slate-no-such-cli` is not on PATH, and skill make-song for need 'music' in specs/capabilities.yaml runs it")
+    expect(halted.st.stopReason).toContain("waive 'slate-no-such-cli'")
+    expect(halted.h.runtime.calls).toHaveLength(0)
+    expect((await run(await needsPack(song("slate-no-such-cli")), { files, config: { capabilities: { waive: ["slate-no-such-cli"] } } })).st.status).toBe("done")
+    expect((await run(await needsPack(song("git")), { files })).st.status).toBe("done")
+  })
+
   test("the installed skills and tools are listed for discovery in .slate/capabilities.md", async () => {
-    const pack = await needsPack()
+    const pack = await needsPack({ "make-song": { description: "Songs via a CLI", requires: { env: ["ACME_KEY"], commands: ["acmemusic"] }, prompt: "make a song" } })
     const { h } = await run(pack, { files: needs([]) })
     const text = await readFile(path.join(h.root, ".slate", "capabilities.md"), "utf8")
     expect(text).toContain("- `make-sounds`: Synthesizes speech clips (tools: probe)")
+    expect(text).toContain("- `make-song`: Songs via a CLI. Setup: needs ACME_KEY set; needs `acmemusic` on PATH.")
     expect(text).toContain("- `playwright`:")
   })
 })
