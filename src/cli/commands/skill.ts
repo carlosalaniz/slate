@@ -6,8 +6,8 @@ import { requireProject, type ProjectCtx } from "../context.ts"
 import { select, spin } from "../prompt.ts"
 import { projectPack } from "./check.ts"
 import { loadCorePack } from "../../engine/core-pack.ts"
-import { projectEnv, readNeeds, uncoveredNeeds, type Need } from "../../engine/capabilities.ts"
-import { readLock } from "../../pack/loader.ts"
+import { projectEnv, readNeeds, uncoveredNeeds, writeCatalog, type Need } from "../../engine/capabilities.ts"
+import { loadPack, readLock } from "../../pack/loader.ts"
 import type { LoadedPack } from "../../engine/types.ts"
 import { fetchSkill, installSkill, installTool, mapNeed, removeInstalled, searchSkills, searchTools, toolId, type FetchedSkill, type Hit, type SkillHit, type ToolHit } from "../../marketplace/marketplace.ts"
 
@@ -23,6 +23,7 @@ const NEEDS_FALLBACK = "specs/capabilities.yaml"
 register(
   "skill",
   `slate skill find [words...] [--need <id>] [--json]
+slate skill show <owner/repo> <skill> | --tool <registry name> [--json]
 slate skill add <owner/repo> <skill> [--need <id>] [--as <id>] [--yes]
 slate skill add --tool <registry name> [--need <id>] [--as <id>] [--yes]
 slate skill list | remove <id>
@@ -33,13 +34,15 @@ changes where). \`find\` with no words searches for the first need in specs/capa
 You pick one and read what it contains (every script it ships, the command a tool runs, the keys it needs)
 before anything is installed. Slate then copies it into .slate/installed/ at a pinned commit or version
 (recorded in lock.yaml; commit it with the project), maps the need to it, and runs \`slate check\`.
-Nothing installed runs until a job uses it. --yes skips the review (only after reading it yourself).`,
+Nothing installed runs until a job uses it. --yes skips the review (only after reading it yourself).
+\`show\` prints that review without installing: what discovery shows you before you decide.`,
   async (argv, out) => {
     const { positional, flags } = parseArgs(["skill", ...argv])
     const sub = positional[0]
     const p = await requireProject()
     if (sub === "find") return find(p, positional.slice(1).join(" "), flags, out)
     if (sub === "add") return add(p, positional.slice(1), flags, out)
+    if (sub === "show") return show(p, positional.slice(1), flags, out)
     if (sub === "list") return list(p, out)
     if (sub === "remove") return remove(p, positional[1], out)
     throw new CliError(`unknown subcommand '${sub ?? ""}'`, "slate skill find | add | list | remove (see slate skill --help)")
@@ -171,6 +174,75 @@ async function add(p: ProjectCtx, args: string[], flags: Record<string, string |
   return installSkillFlow(p, ctx, source, skillId, need, str(flags, "as"), yes, out)
 }
 
+/** The review of one skill or tool, without installing it. */
+async function show(p: ProjectCtx, args: string[], flags: Record<string, string | boolean>, out: Output): Promise<number> {
+  const env = projectEnv(p.root)
+  const tool = str(flags, "tool")
+  if (tool) {
+    const found = (await searchTools(p.config.marketplace.tools, tool, 20)).find((t) => t.name === tool)
+    if (!found) throw new CliError(`no local (npm or PyPI) MCP server named '${tool}' in the registry`, "slate skill find <words> lists what there is")
+    const missing = found.env.filter((k) => env[k] === undefined)
+    out.emit(() => toolReview(found, toolId(found.name), env), { kind: "tool", id: toolId(found.name), name: found.name, version: found.version, description: found.description, runs: found.command, env: found.env, missingEnv: missing, variables: found.envNotes, repository: found.repository ?? null })
+    return 0
+  }
+  const [source, skillId] = args
+  if (!source || !skillId) throw new CliError("give the repository and the skill", "slate skill show elevenlabs/skills text-to-speech")
+  const skill = out.json ? await fetchSkill(source, skillId) : await spin(`fetching ${source} › ${skillId}…`, fetchSkill(source, skillId))
+  try {
+    const keys = [...skill.env, ...skill.envFound]
+    out.emit(() => skillReview(skill, env), {
+      kind: "skill",
+      id: skill.id,
+      source: skill.source,
+      commit: skill.commit,
+      path: skill.path,
+      description: skill.description,
+      compatibility: skill.compatibility ?? null,
+      service: skill.service ?? null,
+      setup: skill.setup,
+      env: keys,
+      missingEnv: keys.filter((k) => env[k] === undefined),
+      files: skill.files,
+      scripts: skill.scripts,
+      skillMd: skill.skillMd.split("\n").slice(0, 40).join("\n"),
+    })
+    return 0
+  } finally {
+    await skill.dispose()
+  }
+}
+
+function skillReview(skill: FetchedSkill, env: Record<string, string>): string[] {
+  const state = (k: string) => `${k} (${env[k] !== undefined ? "set" : "not set"})`
+  return [
+    "",
+    `skill ${skill.id} from ${skill.source} @ ${skill.commit.slice(0, 12)} (${skill.path || "repository root"})`,
+    `  ${skill.description}`,
+    ...(skill.service ? [`  works through: ${skill.service} (an outside service: its account, and its prices)`] : []),
+    ...(skill.setup.length ? [`  setup it asks for: ${skill.setup.join("; ")}`] : []),
+    ...(skill.compatibility ? [`  compatibility: ${skill.compatibility}`] : []),
+    ...(skill.env.length ? [`  needs: ${skill.env.map(state).join(", ")}`] : []),
+    ...(skill.envFound.length ? [`  reads (found in its text; Slate will check them): ${skill.envFound.map(state).join(", ")}`] : []),
+    `  files: ${skill.files.join(", ")}`,
+    skill.scripts.length ? `  scripts it ships (agents may run them): ${skill.scripts.join(", ")}` : "  scripts it ships: none",
+    "  ─── SKILL.md (first lines) ───",
+    ...skill.skillMd.split("\n").slice(0, 24).map((l) => `  │ ${l}`),
+    "",
+  ]
+}
+
+function toolReview(tool: ToolHit, id: string, env: Record<string, string>): string[] {
+  return [
+    "",
+    `tool ${id}: ${tool.name}@${tool.version}${tool.repository ? ` (${tool.repository})` : ""}`,
+    `  ${tool.description}`,
+    `  runs: ${tool.command.join(" ")}`,
+    ...(tool.envNotes.length ? ["  variables:", ...tool.envNotes.map((n) => `    ${n}${env[n.split(" ")[0]!.replace(/:$/, "")] !== undefined ? " [set]" : ""}`)] : []),
+    "  only agents and skills that require it may call its tools; its check is the MCP handshake (free)",
+    "",
+  ]
+}
+
 /** Nothing is installed before the person has seen what it contains, unless they said --yes. */
 async function confirm(out: Output, yes: boolean, lines: string[]): Promise<boolean> {
   out.line(lines.join("\n"))
@@ -185,21 +257,7 @@ async function installSkillFlow(p: ProjectCtx, ctx: Awaited<ReturnType<typeof co
   if (ctx.pack?.skills[id] && !ctx.pack.skills[id]!.source) throw new CliError(`the pack already has a skill '${id}'`, "install it under another name with --as <id>")
   const skill: FetchedSkill = out.json ? await fetchSkill(source, skillId) : await spin(`fetching ${source} › ${skillId}…`, fetchSkill(source, skillId))
   try {
-    const env = projectEnv(p.root)
-    const review = [
-      "",
-      `skill ${skillId} from ${source} @ ${skill.commit.slice(0, 12)} (${skill.path || "repository root"})`,
-      `  ${skill.description}`,
-      ...(skill.compatibility ? [`  compatibility: ${skill.compatibility}`] : []),
-      ...(skill.env.length ? [`  needs: ${skill.env.map((k) => `${k} (${env[k] !== undefined ? "set" : "not set"})`).join(", ")}`] : []),
-      ...(skill.envFound.length ? [`  reads (found in its text; Slate will check them): ${skill.envFound.map((k) => `${k} (${env[k] !== undefined ? "set" : "not set"})`).join(", ")}`] : []),
-      `  files: ${skill.files.join(", ")}`,
-      skill.scripts.length ? `  scripts it ships (agents may run them): ${skill.scripts.join(", ")}` : "  scripts it ships: none",
-      "  ─── SKILL.md (first lines) ───",
-      ...skill.skillMd.split("\n").slice(0, 24).map((l) => `  │ ${l}`),
-      "",
-    ]
-    if (!(await confirm(out, yes, review))) return 1
+    if (!(await confirm(out, yes, skillReview(skill, projectEnv(p.root))))) return 1
     const dest = await installSkill(p.root, skill, id)
     return finish(p, ctx, { skill: id }, need, `installed skill ${id} into ${path.relative(p.root, dest)}`, [...skill.env, ...skill.envFound], out)
   } finally {
@@ -210,17 +268,7 @@ async function installSkillFlow(p: ProjectCtx, ctx: Awaited<ReturnType<typeof co
 async function installToolFlow(p: ProjectCtx, ctx: Awaited<ReturnType<typeof context>>, tool: ToolHit, need: Need | undefined, as: string | undefined, yes: boolean, out: Output): Promise<number> {
   const id = as ?? toolId(tool.name)
   if (ctx.pack?.capabilities[id] && !(await readLock(p.root)).some((e) => e.kind === "tool" && e.id === id)) throw new CliError(`a tool '${id}' already exists`, "install it under another name with --as <id>")
-  const env = projectEnv(p.root)
-  const review = [
-    "",
-    `tool ${id}: ${tool.name}@${tool.version}${tool.repository ? ` (${tool.repository})` : ""}`,
-    `  ${tool.description}`,
-    `  runs: ${tool.command.join(" ")}`,
-    ...(tool.envNotes.length ? ["  variables:", ...tool.envNotes.map((n) => `    ${n}${env[n.split(" ")[0]!.replace(/:$/, "")] !== undefined ? " [set]" : ""}`)] : []),
-    "  only agents and skills that require it may call its tools; its check is the MCP handshake (free)",
-    "",
-  ]
-  if (!(await confirm(out, yes, review))) return 1
+  if (!(await confirm(out, yes, toolReview(tool, id, projectEnv(p.root))))) return 1
   const file = await installTool(p.root, tool, id)
   return finish(p, ctx, { capability: id }, need, `installed tool ${id} into ${path.relative(p.root, file)}`, tool.env, out)
 }
@@ -231,6 +279,8 @@ async function finish(p: ProjectCtx, ctx: Awaited<ReturnType<typeof context>>, t
     await mapNeed(p.root, ctx.needsFile, need.id, target, need.for)
     lines.push(`need '${need.id}' in ${ctx.needsFile} now uses it`)
   }
+  // Discovery's specialists map needs to what is installed: refresh their list.
+  if (ctx.pack) await writeCatalog(p.root, await loadPack(ctx.pack.dir, p.config.config, { projectRoot: p.root }), await loadCorePack())
   const values = projectEnv(p.root)
   const missing = env.filter((k) => values[k] === undefined)
   if (missing.length) lines.push(`set ${missing.join(", ")} (export it, or add it to the project's .env and keep .env out of git)`)

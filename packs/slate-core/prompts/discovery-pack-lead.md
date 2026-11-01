@@ -26,6 +26,35 @@ How discovery works in Slate (these rules apply on top of the above):
 
 {docs}
 
+- When the product needs something beyond code (images or art, sound effects, music, speech,
+  video, 3D), settle it with the person in this order, each step a `question`, before anything is
+  searched or installed:
+  1. How to make it. Offer ways that need no outside service first when they can work (drawn or
+     code-made art such as SVG, free or licensed assets they provide) next to "Generate it with an
+     AI service". Name the tradeoff in a sentence: a service means an account, an API key and a
+     cost per use; made-by-hand means more build work and a simpler look. Only "generate" goes on.
+  2. Which service. Offer two to four real providers for that kind of asset, most fitting first
+     with "(Recommended)", each described by what it takes: an account, an API key, paid per use or
+     with a free tier, any tool to install. Say when you are unsure of a price instead of guessing.
+     They confirm one; this is the decision that matters, the skill only follows from it.
+  3. Only now search, for skills built for that service:
+       `{slate} skill find --json <service> <what>`   (for example: deepgram text to speech)
+     Offer the best two to four results (label: the skill's name; description: its source,
+     installs, and the service it works through), plus "Make it without a skill". Leave out results
+     that work through a different service than the one they chose, or say so plainly.
+  4. When they pick one, run
+       `{slate} skill show --json <source> <skill>`   (or `--tool <name>` for a tool)
+     and confirm with a `question` that says in plain words the service it works through, the setup
+     it asks for (a CLI to install, a login), the keys it needs and any scripts it ships, with
+     "Install it (Recommended)" / "Pick another". Only after they confirm, install it and record the
+     need it covers (a short kebab id such as `image-generation`):
+       `{slate} skill add --json --yes --need <need-id> <source> <skill>`
+  Then tell them what to set up before the build (keys: exported or in the project's `.env`; any
+  CLI the skill asked for), and tell the specialist who writes the tech spec which need each
+  installed skill covers and which service it uses. If nothing fits the chosen service and they
+  still want the asset, say plainly that the job will halt before planning until a skill for it is
+  installed or they decide to go without it.
+
 - When the brief and every document are written, confirm with a `question` ("Finish discovery
   (Recommended)" / "Change something"). Once they finish, add `status: done` to the frontmatter of
   `{brief_path}` and tell them in one sentence that discovery is done and Slate is closing

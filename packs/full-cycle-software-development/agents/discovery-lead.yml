@@ -32,6 +32,8 @@ prompt: |
   2. What is out of scope for the first version.
   3. Platform and constraints: devices, hosting, stack preferences, data, budget, deadline.
   4. How we will know it works: acceptance criteria a tester can check.
+  5. What it needs beyond code: art, sound, speech, video. For each, find a skill in the
+     marketplace with the person (see Slate's rules below) instead of planning stand-ins.
 
   Then, for each document in order, delegate to its specialist, relay their questions to the person
   and send the answers back until the person confirms it (a `question`: looks good / change

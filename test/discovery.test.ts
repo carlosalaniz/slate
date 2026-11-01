@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { projectPaths } from "../src/config/paths.ts"
 import { findPack } from "../src/pack/registry.ts"
 import YAML from "yaml"
-import { checkDiscovery, discoveryDocs, writeCoreLead, writePackAgents, scaffoldDocs, discoveryFiles, archiveDiscovery } from "../src/cli/discovery.ts"
+import { slateCommand, checkDiscovery, discoveryDocs, writeCoreLead, writePackAgents, scaffoldDocs, discoveryFiles, archiveDiscovery } from "../src/cli/discovery.ts"
 import { loadCorePack } from "../src/engine/core-pack.ts"
 import { createJob, runForeground, buildEngine } from "../src/cli/commands/run-job.ts"
 import { Output } from "../src/cli/output.ts"
@@ -98,6 +98,13 @@ describe("discovery agents and placeholders", () => {
     expect(packLead.data.permissions).toContainEqual({ action: "edit", resource: ".slate/brief.md", effect: "allow" })
     expect(packLead.body).toContain("You are the discovery lead for a software product") // the pack's own prompt
     expect(packLead.body).toContain("`specs/product-scope.md`: subagent `slate-analyst`") // Slate's rules
+    // It may search, review and install from the marketplaces, and run nothing else.
+    const slate = slateCommand()
+    expect(packLead.body).toContain(`\`${slate} skill find --json`)
+    expect(packLead.body).toContain(`\`${slate} skill add --json --yes --need <need-id> <source> <skill>\``)
+    const shell = (packLead.data.permissions as { action: string; resource: string; effect: string }[]).filter((r) => r.action === "shell")
+    expect(shell[0]).toEqual({ action: "shell", resource: "*", effect: "deny" })
+    expect(shell.slice(1).map((r) => r.resource)).toEqual(["find", "show", "add", "list"].map((s) => `${slate} skill ${s}*`))
 
     const analyst = await frontOf(path.join(root, ".opencode/agents/slate-analyst.md"))
     expect(analyst.data.mode).toBe("subagent")

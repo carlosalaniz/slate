@@ -24,6 +24,7 @@ talks to agents; no TypeScript change is needed.
 | `gate-review.md` | a gate asks a reviewer | reviewer_prompt, action, resources, inputs |
 | `pack-proposal.md` | intake picks a pack (dry runs without discovery) | packs, brief |
 | `discovery-agent.md` | `slate discover` writes the lead to `.opencode/agents/slate-discovery.md` (system prompt; Slate adds the frontmatter) | project, brief_path, packs, pack_options |
+| `discovery-pack-lead.md` | Slate's rules for a pack's discovery lead (skills marketplace included) | pack, brief_path, docs, slate |
 | `discovery-subagent.md` | the same, for each pack agent that drafts a discovery document | agent_prompt, project |
 | `discovery-stub.md` | placeholder for a discovery document once the pack is chosen | marker, file, agent, instructions |
 | `discovery-start.md` | the first message of a discovery conversation | project |

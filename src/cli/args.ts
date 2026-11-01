@@ -4,6 +4,9 @@ export interface ParsedArgs {
   flags: Record<string, string | boolean>
 }
 
+/** Switches that never take a value, so `--json image generation` keeps its words. */
+const SWITCHES = new Set(["json", "yes", "help", "quiet", "detach", "dry-run", "now", "new", "continue", "restart", "here", "project", "show", "skip-check", "no-discover"])
+
 /** Tiny parser: `--flag`, `--flag value`, `--flag=value`, `--no-flag`, `-y`. */
 export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = []
@@ -26,7 +29,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         continue
       }
       const next = argv[i + 1]
-      if (next !== undefined && !next.startsWith("-")) {
+      if (next !== undefined && !next.startsWith("-") && !SWITCHES.has(body)) {
         flags[body] = next
         i++
       } else flags[body] = true

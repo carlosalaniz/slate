@@ -281,19 +281,28 @@ export async function writePackAgents(paths: ProjectPaths, config: ProjectConfig
   const docList = docs.length
     ? ["Discovery documents, in order:", ...docs.map((d) => `  - \`${d.file}\`: subagent \`${d.subagent}\`. Instructions:\n    ${d.instructions.split("\n").join("\n    ")}`)].join("\n")
     : "This pack needs no discovery documents beyond the brief."
-  const rules = renderPrompt(core, "discovery-pack-lead", { pack: pack.name, brief_path: rel(paths.brief), docs: docList })
+  const slate = slateCommand()
+  const rules = renderPrompt(core, "discovery-pack-lead", { pack: pack.name, brief_path: rel(paths.brief), docs: docList, slate })
   const body = [leadSpec?.prompt.trim(), rules].filter(Boolean).join("\n\n")
   const lead = `slate-${pack.name}`
   const permissions: PermissionRule[] = [
     { action: "question", resource: "*", effect: "allow" },
     { action: "subagent", resource: "*", effect: "allow" },
     { action: "shell", resource: "*", effect: "deny" },
+    // The one command it may run: searching, reviewing and installing skills and tools with the person.
+    ...["find", "show", "add", "list"].map((sub): PermissionRule => ({ action: "shell", resource: `${slate} skill ${sub}*`, effect: "allow" })),
     // The lead writes the brief only; documents go to the pack's specialists.
     { action: "edit", resource: "*", effect: "deny" },
     { action: "edit", resource: rel(paths.brief), effect: "allow" },
   ]
   await writeAgentFile(path.join(agentsDir, `${lead}.md`), { description: leadSpec?.description || `Discovery for the ${pack.name} pack.`, mode: "primary", model: model(leadSpec?.model ?? "high"), permissions }, body)
   return { lead, docs }
+}
+
+/** How an agent runs this Slate: the bun running it and Slate's entry point. */
+export function slateCommand(): string {
+  const q = (s: string) => (/^[\w./@:+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
+  return `${q(process.execPath)} ${q(path.resolve(import.meta.dir, "..", "..", "bin", "slate.ts"))}`
 }
 
 /** An OpenCode agent file: YAML frontmatter (agent config) and the system prompt as the body. */

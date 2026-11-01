@@ -67,6 +67,15 @@ describe("args", () => {
     expect(a.flags["color"]).toBe(false)
     expect(num(parseArgs(["x", "--tail", "5"]).flags, "tail")).toBe(5)
   })
+
+  test("switches never swallow the next word", () => {
+    const a = parseArgs(["skill", "find", "--json", "image", "generation"])
+    expect(bool(a.flags, "json")).toBe(true)
+    expect(a.positional).toEqual(["find", "image", "generation"])
+    const b = parseArgs(["skill", "add", "--json", "--yes", "--need", "art", "acme/skills", "tts"])
+    expect(str(b.flags, "need")).toBe("art")
+    expect(b.positional).toEqual(["add", "acme/skills", "tts"])
+  })
 })
 
 // OpenCode's evaluation: the last rule matching the action and resource wins; nothing matching asks.

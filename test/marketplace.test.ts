@@ -3,7 +3,7 @@ import path from "node:path"
 import { mkdir, writeFile, readFile } from "node:fs/promises"
 import YAML from "yaml"
 import { harness, referencePackDir, tmpProject, testConfig } from "./helpers.ts"
-import { fetchSkill, installSkill, installTool, mapNeed, searchSkills, searchTools, secretsRead, toolId } from "../src/marketplace/marketplace.ts"
+import { fetchSkill, installSkill, installTool, mapNeed, searchSkills, searchTools, secretsRead, serviceOf, setupCommands, toolId } from "../src/marketplace/marketplace.ts"
 import { loadPack, readLock } from "../src/pack/loader.ts"
 import { saveProjectConfig } from "../src/config/project.ts"
 
@@ -51,6 +51,13 @@ describe("marketplace search", () => {
     expect(tools).toHaveLength(1)
     expect(tools[0]).toMatchObject({ name: "io.github.acme/mcp-server-voice", version: "1.1.0", command: ["npx", "-y", "@acme/mcp-server-voice@1.1.0"], env: ["ACME_API_KEY"] })
     expect(toolId(tools[0]!.name)).toBe("voice")
+  })
+
+  test("the service a skill works through and the setup it asks for are found", () => {
+    expect(serviceOf("https://www.runcomfy.com", [])).toBe("runcomfy.com")
+    expect(serviceOf(undefined, ["see https://docs.deepgram.com/a, https://api.deepgram.com/v1 and https://github.com/x/y"])).toBe("deepgram.com")
+    expect(serviceOf(undefined, ["one link https://example.com only"])).toBeUndefined()
+    expect(setupCommands("```bash\nnpm i -g @runcomfy/cli    # global\nnpx -y @runcomfy/cli --version\nruncomfy login\n$ brew install ffmpeg\n```")).toEqual(["npm i -g @runcomfy/cli", "runcomfy login", "brew install ffmpeg"])
   })
 
   test("the keys a skill's text reads are found", () => {

@@ -105,6 +105,10 @@ export interface FetchedSkill {
   env: string[]
   /** Keys the skill's text reads without declaring them (`process.env.DEEPGRAM_API_KEY`, `os.environ["..."]`). */
   envFound: string[]
+  /** The outside service it works through, when it names one (its `homepage`, or the site it links to most). */
+  service?: string
+  /** Setup it asks for before it works: installing a CLI or package, logging in. */
+  setup: string[]
   /** Every file in the folder; scripts are the ones that can run code. */
   files: string[]
   scripts: string[]
@@ -141,7 +145,10 @@ export async function fetchSkill(source: string, skillId: string): Promise<Fetch
     const files = await listFiles(found)
     const texts = await Promise.all(files.filter((f) => /\.(md|txt)$/i.test(f)).map((f) => readText(path.join(found, f))))
     const envFound = [...new Set(texts.flatMap(secretsRead))].filter((k) => !env.has(k))
+    const homepage = typeof data.homepage === "string" ? data.homepage : undefined
     return {
+      service: serviceOf(homepage, texts),
+      setup: [...new Set(texts.flatMap(setupCommands))].slice(0, 6),
       id: skillId,
       source,
       commit,
@@ -160,6 +167,36 @@ export async function fetchSkill(source: string, skillId: string): Promise<Fetch
     await dispose()
     throw e
   }
+}
+
+/** Hosts that are about code, not a service a skill works through. */
+const NOT_SERVICES = /(^|\.)(github\.com|githubusercontent\.com|skills\.sh|npmjs\.com|pypi\.org|agentskills\.io|shields\.io|wikipedia\.org|mozilla\.org|nodejs\.org|python\.org|typescriptlang\.org)$/
+
+/** The service's site: the skill's `homepage`, else the host its text links to most (ignoring code hosts). */
+export function serviceOf(homepage: string | undefined, texts: string[]): string | undefined {
+  const host = (u: string) => {
+    try {
+      return new URL(u).hostname.replace(/^(www|docs|api)\./, "")
+    } catch {
+      return undefined
+    }
+  }
+  if (homepage && host(homepage)) return host(homepage)
+  const counts = new Map<string, number>()
+  for (const t of texts) for (const m of t.matchAll(/https?:\/\/[^\s)"'>\]]+/g)) {
+    const h = host(m[0])
+    if (h && !NOT_SERVICES.test(h)) counts.set(h, (counts.get(h) ?? 0) + 1)
+  }
+  const best = [...counts].sort((a, b) => b[1] - a[1])[0]
+  return best && best[1] >= 2 ? best[0] : undefined
+}
+
+/** Setup lines the text asks for: installing a global CLI or package, logging in to a service. */
+export function setupCommands(text: string): string[] {
+  const out: string[] = []
+  const re = /^\s*\$?\s*((?:npm (?:i|install) (?:-g|--global)|pnpm add -g|bun (?:add|install) -g|yarn global add|pip3? install|pipx install|uv tool install|brew install|cargo install|go install|gem install)\s+[^\s#`]+|curl [^\n#`]*\|\s*(?:ba)?sh|[a-z][a-z0-9-]* (?:login|auth login))/gm
+  for (const m of text.matchAll(re)) out.push(m[1]!.trim())
+  return out
 }
 
 /** Secret-looking variables code in the text reads: `process.env.X`, `os.environ["X"]`, `os.getenv("X")`, `$X`. */
