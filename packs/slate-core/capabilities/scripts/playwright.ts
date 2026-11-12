@@ -16,14 +16,19 @@ const reply = (answer: Record<string, unknown>): never => {
 }
 
 const workspace = process.env.SLATE_WORKSPACE ?? process.cwd()
+/** Playwright installed at or above `from`. Only installed copies: resolving from a directory with no
+ * node_modules makes Bun auto-install the latest release, whose browser build is not downloaded. */
+function installedPlaywright(from: string): string | undefined {
+  for (let dir = path.resolve(from); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, "node_modules", "playwright", "package.json"))) return Bun.resolveSync("playwright", dir)
+    if (path.dirname(dir) === dir) return undefined
+  }
+}
+
 let entry: string | undefined
 for (const from of [workspace, import.meta.dir]) {
-  try {
-    entry = Bun.resolveSync("playwright", from)
-    break
-  } catch {
-    /* try the next place */
-  }
+  entry = installedPlaywright(from)
+  if (entry) break
 }
 if (!entry) reply({ ok: false, reason: "the playwright package is not installed in the project or next to Slate" })
 

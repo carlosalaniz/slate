@@ -8,6 +8,7 @@
     "slate": "./bin/slate.ts"
   },
   "scripts": {
+    "postinstall": "playwright install chromium",
     "slate": "bun run bin/slate.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json",
@@ -28,5 +29,6 @@
     "@types/bun": "^1.2.0",
     "@types/picomatch": "^4.0.0",
     "typescript": "^5.9.0"
-  }
+  },
+  "license": "MIT"
 }

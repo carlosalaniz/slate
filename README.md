@@ -8,8 +8,23 @@ blocking, and packs. It never touches a model turn; it only acts at the boundary
 
 Runtime: **Bun** (the OpenCode SDK uses `bun:sqlite` and `bun:ffi`, so Node cannot host it).
 
+## Prerequisites
+
+- **Bun ≥ 1.2.** Node will not work.
+- **OpenCode v2** on your PATH (`opencode --version`). Discovery runs in your own OpenCode.
+- **A provider API key added to OpenCode** (`opencode auth login`) or set in the environment
+  (e.g. `ANTHROPIC_API_KEY`). Slate reads your OpenCode API keys read-only and uses them in its own
+  process only; it never writes them anywhere. OAuth logins are not reused.
+- **Set `provider` and `models` explicitly in `slate.config.yml`.** Without a key and a set model,
+  OpenCode routes to its free tier, which refuses embedded hosts like Slate.
+- Git. `bun install` also downloads Playwright's headless Chromium (used by the UX review and its
+  tests); if that step was skipped, run `bunx playwright install chromium`.
+
+## Install
+
 ```
-bun install
+git clone https://github.com/carlosalaniz/slate.git && cd slate
+bun install              # also installs Playwright's Chromium
 bun run slate --help
 bun run check            # typecheck + tests
 ```

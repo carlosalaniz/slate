@@ -138,13 +138,19 @@ function measure({ minTarget }: { minTarget: number }): string[] {
   return [...new Set(out)].slice(0, 40)
 }
 
+/** Playwright installed at or above `from`. Only installed copies: resolving from a directory with no
+ * node_modules makes Bun auto-install the latest release, whose browser build is not downloaded. */
+function installedPlaywright(from: string): string | undefined {
+  for (let dir = path.resolve(from); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, "node_modules", "playwright", "package.json"))) return Bun.resolveSync("playwright", dir)
+    if (path.dirname(dir) === dir) return undefined
+  }
+}
+
 async function loadPlaywright(): Promise<typeof import("playwright")> {
   for (const from of [workspace, import.meta.dir]) {
-    try {
-      return (await import(Bun.resolveSync("playwright", from))) as typeof import("playwright")
-    } catch {
-      /* next */
-    }
+    const entry = installedPlaywright(from)
+    if (entry) return (await import(entry)) as typeof import("playwright")
   }
   return broken("playwright is not installed; `slate check` says how to install it")
 }
